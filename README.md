@@ -129,3 +129,7 @@ learning state.
   reference (code.claude.com), TypeSafe API and confidence docs (docs.typesafe.ai). Community inputs:
   nidhinjs/prompt-master (intent extraction, diagnostics, credential handling) and a ChatGPT-authored
   prompt-optimizer (priority order, evidence taxonomy, reply budgets).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
