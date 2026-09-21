@@ -21,6 +21,33 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
 
+def _record_baseline(W, cfg, analysis, session, hook_ms) -> None:
+    """This prompt went to Claude untouched. Log it as the control arm: the next message labels it
+    through the same path, so `stats` can say whether the pass changes anything."""
+    if not cfg.get("record_baseline", True):
+        return
+    try:
+        rec = W.new_record(session, analysis.get("project", ""), analysis["task_type"]["value"], mode="baseline")
+        rec["tokens_in"] = analysis["tokens"]
+        rec["triage"] = analysis["triage"]["value"]
+        rec["hook_ms"] = hook_ms
+        rec["fp"] = analysis.get("fingerprint", "")
+        with W.memory_lock(timeout_s=1.0):
+            recs = W.read_log()
+            changed = False
+            for r in recs:   # a new prompt closes whatever was open for this session
+                if not r.get("closed") and not r.get("dry") and (r.get("session") or "") == (session or ""):
+                    r["closed"] = True
+                    if r.get("outcome") is None:
+                        r["outcome"], r["labeled_by"] = "ok_implicit", "next-prompt"
+                    changed = True
+            if changed:
+                W.rewrite_log(recs)
+            W.append_log(rec)
+    except Exception:
+        pass
+
+
 def main() -> None:
     t0 = time.time()
     try:
@@ -133,6 +160,7 @@ def main() -> None:
         actionable = bool(a["paths"]["missing"] or a["fenced_blocks"] or a["claude_md_overlap"] or a["secrets_detected"]
                           or a.get("seen_before", 0) >= 2 or a["risk"]["value"] or a["multi_task_hint"])
         if a["triage"]["value"] == "skip" or (a["triage"]["value"] == "light" and not actionable):
+            _record_baseline(W, cfg, a, session, int((time.time() - t0) * 1000))
             return
         # the hook sits between enter and Claude seeing the prompt; carry the cost so stats can show it
         a["hook_ms"] = int((time.time() - t0) * 1000)

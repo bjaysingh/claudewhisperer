@@ -25,7 +25,7 @@ Requirements: Python 3.9+ (macOS system python is fine), no packages. Works in a
 | `/whisper quiet ...` | rewrite and execute, show nothing |
 | `/whisper dry ...` / `/whisper audit ...` | show the rewrite (audit adds the changes and token delta); do not execute |
 | `/whisper good` / `/whisper bad it dropped the year pagination` | label the last run; `bad` usually produces a rule |
-| `/whisper stats` | reduction, correction rate, follow-up turns per task, causes, shortcut use |
+| `/whisper stats` | whether it helps (whispered runs vs untouched ones), reduction, correction rate, follow-up turns, causes |
 | `/whisper learnings` | the rules and shortcuts it has learned |
 | `/whisper learn` | consolidate the log into rules now (also runs on its own every 10 runs) |
 | `/whisper restart` | one fresh prompt carrying everything settled in this session, for after `/clear` |
@@ -110,6 +110,14 @@ deliberate bump, run `python3 tests/run_cases.py --jev` and read the diff before
 
 Evidence rules: only explicit corrections and approvals drive rule promotion. "The user moved on" is recorded
 as `ok_implicit` and shown in stats, but it is not evidence of success.
+
+**Does it actually help?** A correction rate on its own answers nothing, so the hook also logs the prompts it
+decided *not* to touch, as `baseline` runs (`record_baseline`, on by default; same privacy rules - fingerprint,
+task type and counts, never the text). They are labelled by the same path as whispered runs, so `stats` can put
+the two arms side by side: correction rate, follow-up turns, reply length, questions asked. It refuses to show
+a delta until there are 10 labelled runs in each arm, and it says out loud that the split is self-selected -
+the triage sends the messier prompts to the treated arm, which biases *against* the pass. Baseline runs are the
+control only: they never feed `learn`, and they stay out of every per-transform and per-task number.
 
 Set `WHISPERER_HOME=/some/dir` to keep `memory/` outside the skill folder (survives reinstalling the skill).
 

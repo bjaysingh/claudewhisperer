@@ -89,6 +89,17 @@ Labeling happens in three places: `hooks/user_prompt_submit.py` (automatic, when
 `W.find_pending()` finds the open record for a session; a new `log` in the same session closes the previous one
 as `ok_implicit`.
 
+### The control arm
+
+`stats` has to answer "is this working?", which a correction rate alone cannot. Prompts the hook triages as
+untouched are logged by `_record_baseline()` as records with `mode: "baseline"` and labelled through the same
+path, giving `_effect()` two arms to compare. Rules that keep it honest, all pinned by `tests/test_stats.py`:
+baseline runs are never evidence for `learn` and are excluded from every per-transform and per-task metric;
+`_effect()` withholds a delta below `MIN_PER_ARM` (10) labelled runs per arm rather than showing a number that
+would be read as a result; the verdict states that the split is self-selected. A record with no `mode` predates
+the field and counts as whispered (`W.is_whispered`). A prompt seen before is actionable, so it leaves the
+control arm - expected, and the thing that breaks naive test isolation via `prompts.jsonl`.
+
 ### Learning
 
 `cmd_learn` is deterministic: it scans the log and emits **candidates** (numbered `C00x`) into the `## Candidates`

@@ -44,6 +44,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "stale_after_runs": 30,       # a rule unused for this many runs is flagged stale
     # prompts.jsonl is a rebuildable cache for repetition detection, and a rolling window is more
     # correct than the full history: a prompt repeated months ago is not a current habit.
+    # log the prompts Whisperer decided NOT to touch, so the ones it did touch have something to be
+    # compared against. Same privacy rules: fingerprint, task type and counts, never the text.
+    "record_baseline": True,
     "max_prompts_retained": 5000,
     "prompts_max_bytes": 1000000,  # size check is O(1); the rewrite below it is rare
     "max_active_rules": 25,       # `learn` warns above this; more rules than this get ignored, not followed
@@ -1032,6 +1035,29 @@ def bump_rules(ids: List[str], field: str) -> None:
 
 
 # --------------------------------------------------------------------------- log
+
+def new_record(session: str, project: str, task_type: str, mode: str = "whispered") -> Dict[str, Any]:
+    """The shape of one run. `mode` is the control: `baseline` runs are prompts the triage let through
+    untouched, labelled by the same machinery, so `stats` has something to compare against."""
+    return {
+        "id": "w-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + hashlib.sha1(os.urandom(8)).hexdigest()[:4],
+        "ts": now_iso(),
+        "session": session or "",
+        "project": project,
+        "mode": mode,
+        "task_type": task_type,
+        "tokens_in": None, "tokens_out": None, "reduction": None,
+        "transforms": [], "rules": [], "gate": "", "gate_reason": "",
+        "outcome": None, "cause": None, "note": "", "labeled_by": "",
+        "reply_chars": None, "followups": 0, "questions_asked": 0, "followup_kind": None,
+        "closed": False, "dry": False, "hook_ms": None,
+    }
+
+
+def is_whispered(r: Dict[str, Any]) -> bool:
+    """Records written before `mode` existed were all whispered runs."""
+    return r.get("mode", "whispered") == "whispered"
+
 
 def read_log() -> List[Dict[str, Any]]:
     ensure_memory()

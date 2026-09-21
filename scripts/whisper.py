@@ -98,6 +98,7 @@ def cmd_log(args) -> None:
         "ts": W.now_iso(),
         "session": args.session or "",
         "project": analysis.get("project") or os.path.basename(W.git_root(os.getcwd()) or os.getcwd()),
+        "mode": "whispered",
         "analysis": args.analysis or "",
         "task_type": args.task_type or analysis.get("task_type", {}).get("value", "other"),
         "triage": analysis.get("triage", {}).get("value", ""),
@@ -238,7 +239,7 @@ def cmd_learn(args) -> None:
 
 def _consolidate(args) -> None:
     cfg = W.load_config()
-    all_recs = W.read_log()
+    all_recs = [r for r in W.read_log() if W.is_whispered(r)]   # baseline runs are the control, not evidence
     recs = [r for r in all_recs if not r.get("dry")]
     # Only strong signals count as evidence: explicit ok / explicit correction.
     # "The user moved on" (ok_implicit) is not evidence of success. A dry/audit run the user labeled counts too:
@@ -397,6 +398,63 @@ def cmd_learnings(args) -> None:
 
 # ------------------------------------------------------------------ stats
 
+MIN_PER_ARM = 10          # below this a difference between the arms is noise, and saying otherwise is worse than silence
+
+
+def _arm(recs) -> dict:
+    """The metrics that say whether a prompt worked, for one arm of the comparison."""
+    labeled = [r for r in recs if r.get("outcome") in ("ok", "correction")]
+    closed = [r for r in recs if r.get("closed")]
+    replies = [r["reply_chars"] for r in recs if r.get("reply_chars")]
+    fups = [int(r.get("followups", 0)) for r in closed]
+    return {
+        "runs": len(recs),
+        "labeled_runs": len(labeled),
+        "correction_rate_pct": round(100 * sum(1 for r in labeled if r["outcome"] == "correction") / len(labeled), 1) if labeled else None,
+        "avg_followup_turns": round(sum(fups) / len(fups), 2) if fups else None,
+        "avg_reply_chars": int(sum(replies) / len(replies)) if replies else None,
+        "questions_per_run": round(sum(int(r.get("questions_asked", 0)) for r in closed) / len(closed), 2) if closed else None,
+    }
+
+
+def _delta(whispered, baseline) -> dict:
+    """Whispered minus baseline. Negative is better for every metric here."""
+    out_ = {}
+    for k in ("correction_rate_pct", "avg_followup_turns", "avg_reply_chars", "questions_per_run"):
+        a, b = whispered.get(k), baseline.get(k)
+        out_[k] = round(a - b, 2) if a is not None and b is not None else None
+    return out_
+
+
+def _effect(recs) -> dict:
+    """Does the pass change anything? Answered against the prompts it chose not to touch.
+
+    The hook logs those as `baseline` runs and labels them through the same path, so the two arms
+    differ in the treatment rather than in how they were measured. Self-selected, not randomised:
+    the triage sends the messier prompts to the treatment arm, which biases against the pass."""
+    whispered = _arm([r for r in recs if W.is_whispered(r)])
+    baseline = _arm([r for r in recs if not W.is_whispered(r)])
+    state = {"whispered": whispered, "baseline": baseline}
+    if min(whispered["labeled_runs"], baseline["labeled_runs"]) < MIN_PER_ARM:
+        state["verdict"] = ("not enough data: %d labelled whispered runs and %d labelled baseline runs, "
+                            "need %d of each before a difference means anything"
+                            % (whispered["labeled_runs"], baseline["labeled_runs"], MIN_PER_ARM))
+    else:
+        state["delta_vs_baseline"] = _delta(whispered, baseline)
+        state["verdict"] = "compare delta_vs_baseline; negative is better on every metric, and the split is self-selected"
+    return state
+
+
+def _trend(recs) -> dict:
+    """Recent half against the earlier half: is the learning loop actually moving anything?"""
+    labeled = [r for r in recs if W.is_whispered(r) and r.get("outcome") in ("ok", "correction")]
+    if len(labeled) < 2 * MIN_PER_ARM:
+        return {"verdict": "not enough labelled runs yet (%d of %d)" % (len(labeled), 2 * MIN_PER_ARM)}
+    half = len(labeled) // 2
+    earlier, recent = _arm(labeled[:half]), _arm(labeled[half:])
+    return {"earlier": earlier, "recent": recent, "change": _delta(recent, earlier)}
+
+
 def _latency(recs) -> dict:
     """What the hook costs the user, measured. Prune/optimise when p95 climbs, not before."""
     xs = sorted(int(r["hook_ms"]) for r in recs if r.get("hook_ms") is not None)
@@ -414,24 +472,25 @@ def cmd_stats(args) -> None:
     recs = [r for r in all_recs if not r.get("dry")]
     dry = [r for r in all_recs if r.get("dry")]
     n = len(recs)
+    whispered = [r for r in recs if W.is_whispered(r)]
     if n == 0 and not dry:
         out({"runs": 0, "message": "no runs yet"})
         return
-    outcomes = Counter(r.get("outcome") or "pending" for r in recs)
-    causes = Counter(r.get("cause") for r in recs if r.get("outcome") == "correction")
-    reductions = [r["reduction"] for r in recs if r.get("reduction") is not None]
+    outcomes = Counter(r.get("outcome") or "pending" for r in whispered)
+    causes = Counter(r.get("cause") for r in whispered if r.get("outcome") == "correction")
+    reductions = [r["reduction"] for r in whispered if r.get("reduction") is not None]
     shrunk = sorted(x for x in reductions if x > 0)
     expanded = sum(1 for x in reductions if x < 0)
-    tin = sum(r.get("tokens_in") or 0 for r in recs)
-    tout = sum(r.get("tokens_out") or 0 for r in recs)
+    tin = sum(r.get("tokens_in") or 0 for r in whispered)
+    tout = sum(r.get("tokens_out") or 0 for r in whispered)
     replies = [r["reply_chars"] for r in recs if r.get("reply_chars")]
     by_tt = defaultdict(lambda: {"runs": 0, "corrections": 0})
-    for r in recs:
+    for r in whispered:
         b = by_tt[r.get("task_type", "other")]
         b["runs"] += 1
         b["corrections"] += 1 if r.get("outcome") == "correction" else 0
     tf = defaultdict(lambda: {"applied": 0, "corrections": 0})
-    for r in recs:
+    for r in whispered:
         for t in r.get("transforms", []):
             tf[t]["applied"] += 1
             tf[t]["corrections"] += 1 if r.get("outcome") == "correction" else 0
@@ -440,10 +499,14 @@ def cmd_stats(args) -> None:
         with open(W.JEV_STATUS_PATH, encoding="utf-8") as f:
             jev_st = json.load(f)
     labeled = outcomes["ok"] + outcomes["correction"]
-    closed = [r for r in recs if r.get("closed")]
+    closed = [r for r in whispered if r.get("closed")]
     fups = [int(r.get("followups", 0)) for r in closed]
     out({
         "runs": n,
+        "whispered_runs": sum(1 for r in recs if W.is_whispered(r)),
+        "baseline_runs": sum(1 for r in recs if not W.is_whispered(r)),
+        "does_it_help": _effect(recs),
+        "trend": _trend(recs),
         "dry_or_audit_runs": len(dry),
         "dry_runs_labeled": {k: v for k, v in Counter(r.get("outcome") for r in dry if r.get("outcome")).items()},
         "prompt_tokens_saved_total": tin - tout,
