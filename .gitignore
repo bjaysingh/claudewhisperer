@@ -1,0 +1,15 @@
+# Local learning state. Created by ensure_memory() on first run; never shipped —
+# log.jsonl, shortcuts.json, prompts.jsonl and pending/ are the user's own data.
+memory/
+
+# Editor / OS
+.obsidian/
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Backups written by `whisper.py hook on`
+*.bak
+*.whisperer.bak
