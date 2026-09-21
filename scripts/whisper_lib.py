@@ -803,7 +803,7 @@ Q_ANALYZE: Dict[str, Dict[str, Any]] = {
     },
     "multi_task": {
         "type": "noul",
-        "instructions": "The message asks for more than one independent task that could be done separately.",
+        "instructions": "The message asks for more than one independent task that could be done separately. A request to explain, summarise, describe, or report on the same work is an output format request, not a second task.",
     },
 }
 

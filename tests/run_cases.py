@@ -17,7 +17,10 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import _bootstrap  # noqa: E402,F401
+import _bootstrap  # noqa: E402
+# _bootstrap drops the key so the unit suite stays offline; this script is the Jev path.
+if _bootstrap._STASHED_JEV_KEY:
+    os.environ["TYPESAFE_API_KEY"] = _bootstrap._STASHED_JEV_KEY
 import whisper_lib as W  # noqa: E402
 from test_cases import CASES_DIR, analyse, load_cases  # noqa: E402
 
@@ -52,9 +55,14 @@ def snapshot_of(case, use_jev):
     }
     if use_jev:
         row["jev_used"] = a["jev"]["used"]
+        # Jev's confidence wobbles a few points between identical runs, so an exact float would
+        # report drift every time and the gate would mean nothing. What matters is which side of
+        # the threshold it lands on, because that is what decides heuristic vs jev.
+        floor = W.load_config()["jev"]["task_min_confidence"]
         for k in ("task_type", "triage"):
-            if a[k].get("confidence") is not None:
-                row[k + "_confidence"] = a[k]["confidence"]
+            c = a[k].get("confidence")
+            if c is not None:
+                row[k + "_confidence_band"] = ">=floor" if c >= floor else "<floor"
     return row
 
 
