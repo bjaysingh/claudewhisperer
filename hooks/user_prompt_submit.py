@@ -16,11 +16,13 @@ Any failure exits 0 with no output: the hook must never get in the user's way.
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 
 
 def main() -> None:
+    t0 = time.time()
     try:
         data = json.load(sys.stdin)
     except Exception:
@@ -41,12 +43,13 @@ def main() -> None:
     notes = []
     kind = None        # how this message relates to the previous run, if there is one
     fk = None          # routine follow-up kind, when the user moved on
+    log_records = None  # read once below, reused by analyze_prompt instead of a second read
 
     # 1. learning loop: label the previous open run
     try:
         # short lock timeout: a hook must never make the user wait on another session's write
         with W.memory_lock(timeout_s=1.0):
-            recs = W.read_log()
+            recs = log_records = W.read_log()
             idx = W.find_pending(recs, session=session)
             if idx is not None:
                 r = recs[idx]
@@ -124,13 +127,15 @@ def main() -> None:
             return
         if kind == "new_task" and fk not in (None, "unrelated"):
             return
-        a = W.analyze_prompt(prompt, cwd, cfg, use_jev=True)
+        a = W.analyze_prompt(prompt, cwd, cfg, use_jev=True, log_records=log_records)
         a["preview"] = "" if not cfg.get("store_previews") else W.redact_secrets(prompt)[: cfg["preview_chars"]]
         a["hash"] = W.hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
         actionable = bool(a["paths"]["missing"] or a["fenced_blocks"] or a["claude_md_overlap"] or a["secrets_detected"]
                           or a.get("seen_before", 0) >= 2 or a["risk"]["value"] or a["multi_task_hint"])
         if a["triage"]["value"] == "skip" or (a["triage"]["value"] == "light" and not actionable):
             return
+        # the hook sits between enter and Claude seeing the prompt; carry the cost so stats can show it
+        a["hook_ms"] = int((time.time() - t0) * 1000)
         W.write_json(os.path.join(W.PENDING_DIR, a["id"] + ".json"), a)
         skill_md = os.path.join(W.SKILL_DIR, "SKILL.md")
         parts = [

@@ -6,8 +6,8 @@ raising, which is why they are the ones worth a test at all.
 import json
 import multiprocessing
 import os
-import sys
 import unittest
+from unittest import mock
 
 import _bootstrap  # noqa: F401  (sets WHISPERER_HOME before whisper_lib is imported)
 import whisper_lib as W
@@ -163,3 +163,84 @@ class RiskDetection(unittest.TestCase):
         for prompt in ("drop the ball on this feature", "style the dropdown component"):
             with self.subTest(prompt=prompt):
                 self.assertNotIn("schema", W.find_risks(prompt))
+
+
+class TaskTypeHeuristic(unittest.TestCase):
+    """Task type picks the reply budget and sorts the rules. With Jev off — the path anyone
+    installing without a TypeSafe key is on — this heuristic is the only classifier there is."""
+
+    def kind(self, prompt, flags=None):
+        return W.task_type_heuristic(prompt, flags if flags is not None else W.find_risks(prompt))[0]
+
+    def test_a_negated_keyword_does_not_set_the_type(self):
+        self.assertEqual(self.kind("review this branch, do not refactor anything while you are in there"), "review")
+        self.assertEqual(self.kind("add the endpoint without refactoring the router"), "feature")
+        self.assertEqual(self.kind("explain the cache, don't add tests for it"), "explain")
+
+    def test_a_real_keyword_still_counts(self):
+        self.assertEqual(self.kind("refactor the router into two modules"), "refactor")
+        self.assertEqual(self.kind("add tests for the parser"), "test")
+
+    def test_a_trailing_output_request_does_not_become_the_task(self):
+        self.assertEqual(self.kind("cache the user lookup in the profile endpoint, and also explain "
+                                   "what you changed and why it is safe"), "feature")
+
+    def test_a_genuine_explain_task_is_still_explain(self):
+        self.assertEqual(self.kind("the scheduler is confusing, explain how the startup tick works"), "explain")
+        self.assertEqual(self.kind("walk me through the auth flow"), "explain")
+
+    def test_destructive_work_reads_as_ops_not_a_tidy_up(self):
+        self.assertEqual(self.kind("clean up the old release branches and drop the legacy_sessions "
+                                   "table from production, then redeploy"), "ops")
+
+    def test_risk_flags_do_not_override_a_confident_bugfix(self):
+        self.assertEqual(self.kind("fix the crash when the migration runs twice"), "bugfix")
+
+
+class PromptCachePruning(unittest.TestCase):
+    """prompts.jsonl is a rebuildable cache read on every hook run; it has to stay bounded."""
+
+    def setUp(self):
+        W.ensure_memory()
+        open(W.PROMPTS_PATH, "w").close()
+        self.cfg = W.load_config()
+
+    def _fill(self, n):
+        with open(W.PROMPTS_PATH, "w", encoding="utf-8") as f:
+            for i in range(n):
+                f.write(json.dumps({"ts": W.now_iso(), "session": "s", "source": "hook",
+                                    "fp": "alpha beta gamma %d" % i, "preview": "", "words": 12}) + "\n")
+
+    def test_a_small_cache_is_left_alone(self):
+        self._fill(100)
+        self.assertEqual(W.prune_prompts(self.cfg), 0)
+        self.assertEqual(len(W.read_prompts_seen()), 100)
+
+    def test_an_oversized_cache_is_trimmed_to_the_window(self):
+        cfg = dict(self.cfg, max_prompts_retained=500, prompts_max_bytes=1000)
+        self._fill(2000)
+        self.assertEqual(W.prune_prompts(cfg), 1500)
+        kept = W.read_prompts_seen()
+        self.assertEqual(len(kept), 500)
+        self.assertEqual(kept[-1]["fp"], "alpha beta gamma 1999", "the newest records are the ones kept")
+
+    def test_pruning_survives_a_missing_file(self):
+        os.remove(W.PROMPTS_PATH)
+        self.assertEqual(W.prune_prompts(self.cfg), 0)
+
+    def test_recording_a_prompt_prunes_as_it_goes(self):
+        W.write_json(W.CONFIG_PATH, dict(self.cfg, max_prompts_retained=50, prompts_max_bytes=1000))
+        try:
+            self._fill(400)
+            W.record_prompt_seen("what is still pending on the parser work", "s", "test")
+            self.assertLessEqual(len(W.read_prompts_seen()), 51)
+        finally:
+            W.write_json(W.CONFIG_PATH, self.cfg)
+
+
+class LearnDueReadsTheLogOnce(unittest.TestCase):
+    def test_caller_supplied_records_are_used(self):
+        """The hook has already read the log; analyze_prompt must not read it again."""
+        cfg = W.load_config()
+        with mock.patch.object(W, "read_log", side_effect=AssertionError("read the log twice")):
+            self.assertFalse(W.learn_due(cfg, []))

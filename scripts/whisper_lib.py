@@ -42,6 +42,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "store_previews": False,      # keep a short redacted preview of each prompt (off: content-word fingerprint only)
     "preview_chars": 160,
     "stale_after_runs": 30,       # a rule unused for this many runs is flagged stale
+    # prompts.jsonl is a rebuildable cache for repetition detection, and a rolling window is more
+    # correct than the full history: a prompt repeated months ago is not a current habit.
+    "max_prompts_retained": 5000,
+    "prompts_max_bytes": 1000000,  # size check is O(1); the rewrite below it is rare
     "max_active_rules": 25,       # `learn` warns above this; more rules than this get ignored, not followed
     "hook": {"skip_under_words": 7},
     "jev": {
@@ -303,19 +307,50 @@ def redact_secrets(text: str) -> str:
     return text
 
 
-def task_type_heuristic(text: str) -> Tuple[str, Dict[str, int]]:
-    low = text.lower()
+NEGATION_RE = re.compile(r"(?:\bdo\s?n[o']?t\b|\bdon'?t\b|\bnever\b|\bwithout\b|\bno\b|\bavoid\b)"
+                         r"(?:\s+\w+){0,2}\s*$")
+
+# A trailing "and also explain what you changed" is an output request about the one task, not the
+# task itself (SKILL.md step 2). Scored separately so it cannot outvote the work being asked for.
+OUTPUT_REQUEST_TAIL = re.compile(
+    r"[,.;:]?\s+(?:and\s+)?(?:then\s+)?(?:also\s+)?(?:please\s+)?"
+    r"(?:explain|summari[sz]e|describe|walk me through|tell me|let me know|write ?up)\b.*$", re.S)
+
+# Risk flags that mean the work is operational whatever verb the user reached for
+OPS_RISK_FLAGS = {"schema", "deploy", "delete"}
+
+TASK_ORDER = ["bugfix", "test", "refactor", "review", "explain", "research", "docs", "ops", "feature"]
+
+
+def _score_tasks(low: str) -> Dict[str, int]:
     scores: Dict[str, int] = {}
     for name, pat in TASK_KEYWORDS:
-        n = len(re.findall(pat, low))
+        n = 0
+        for m in re.finditer(pat, low):
+            # "do not refactor anything" is not a refactor request
+            if NEGATION_RE.search(low[max(0, m.start() - 24):m.start()]):
+                continue
+            n += 1
         if n:
             scores[name] = n
+    return scores
+
+
+def task_type_heuristic(text: str, risk_flags: Optional[List[str]] = None) -> Tuple[str, Dict[str, int]]:
+    low = text.lower()
+    body = OUTPUT_REQUEST_TAIL.sub("", low)
+    scores = _score_tasks(body) if len(body.split()) >= 5 else {}
+    if not scores:                      # the tail was the whole ask, so score the lot
+        scores = _score_tasks(low)
     if not scores:
         return "other", scores
     # bugfix and test outrank the generic 'feature' verbs when tied
-    order = ["bugfix", "test", "refactor", "review", "explain", "research", "docs", "ops", "feature"]
-    best = max(scores.items(), key=lambda kv: (kv[1], -order.index(kv[0])))
-    return best[0], scores
+    best = max(scores.items(), key=lambda kv: (kv[1], -TASK_ORDER.index(kv[0])))[0]
+    # a destructive or deploy-shaped ask is ops work, whatever tidy-up verb introduced it;
+    # a confident bugfix/test/review/explain keeps its own type and its own reply budget
+    if best in ("refactor", "feature", "other") and set(risk_flags or []) & OPS_RISK_FLAGS:
+        best = "ops"
+    return best, scores
 
 
 def find_paths(text: str, cwd: str) -> Dict[str, List[str]]:
@@ -502,9 +537,27 @@ def record_prompt_seen(prompt: str, session: str, source: str) -> None:
         return
     cfg = load_config()
     preview = redact_secrets(prompt)[:120] if cfg.get("store_previews") else ""
-    with open(PROMPTS_PATH, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": now_iso(), "session": session, "source": source, "fp": fp,
-                            "preview": preview, "words": len(prompt.split())}, ensure_ascii=False) + "\n")
+    with memory_lock(timeout_s=1.0):
+        with open(PROMPTS_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": now_iso(), "session": session, "source": source, "fp": fp,
+                                "preview": preview, "words": len(prompt.split())}, ensure_ascii=False) + "\n")
+        prune_prompts(cfg)
+
+
+def prune_prompts(cfg: Dict[str, Any]) -> int:
+    """Keep the fingerprint cache to a rolling window. Returns the number of records dropped."""
+    try:
+        if os.path.getsize(PROMPTS_PATH) <= cfg["prompts_max_bytes"]:
+            return 0
+        with open(PROMPTS_PATH, encoding="utf-8") as f:
+            lines = f.readlines()
+        keep = max(1, int(cfg["max_prompts_retained"]))
+        if len(lines) <= keep:
+            return 0
+        atomic_write(PROMPTS_PATH, "".join(lines[-keep:]))
+        return len(lines) - keep
+    except Exception:
+        return 0
 
 
 def read_prompts_seen() -> List[Dict[str, Any]]:
@@ -797,7 +850,9 @@ def _answer(answers: Optional[Dict[str, Any]], key: str) -> Optional[Dict[str, A
 
 # --------------------------------------------------------------------------- analysis
 
-def analyze_prompt(prompt: str, cwd: str, cfg: Dict[str, Any], use_jev: bool = True) -> Dict[str, Any]:
+def analyze_prompt(prompt: str, cwd: str, cfg: Dict[str, Any], use_jev: bool = True,
+                   log_records: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """`log_records` lets a caller that has already read the log (the hook has) skip a second read."""
     cwd = cwd or os.getcwd()
     a: Dict[str, Any] = {
         "id": "a-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:6],
@@ -824,7 +879,7 @@ def analyze_prompt(prompt: str, cwd: str, cfg: Dict[str, Any], use_jev: bool = T
     a["fingerprint"] = fingerprint(prompt)
     a["seen_before"] = sum(1 for p in read_prompts_seen() if p["fp"] == a["fingerprint"] or jaccard(p["fp"], a["fingerprint"]) >= 0.7)
 
-    tt, scores = task_type_heuristic(prompt)
+    tt, scores = task_type_heuristic(prompt, a["risks"])
     a["task_type"] = {"value": tt, "source": "heuristic", "confidence": None, "keyword_scores": scores}
     a["risk"] = {"value": bool(a["risks"]), "source": "heuristic", "flags": a["risks"]}
 
@@ -854,7 +909,7 @@ def analyze_prompt(prompt: str, cwd: str, cfg: Dict[str, Any], use_jev: bool = T
                 a["multi_task_p"] = round(m["noul"], 2)
 
     a["rules"] = relevant_rules(load_rules(), a)
-    a["learn_due"] = learn_due(cfg)
+    a["learn_due"] = learn_due(cfg, log_records)
     a["hook_on"] = hook_installed()
     return a
 
@@ -1022,8 +1077,8 @@ def find_pending(records: List[Dict[str, Any]], session: Optional[str] = None, m
     return None
 
 
-def learn_due(cfg: Dict[str, Any]) -> bool:
-    recs = read_log()
+def learn_due(cfg: Dict[str, Any], records: Optional[List[Dict[str, Any]]] = None) -> bool:
+    recs = read_log() if records is None else records
     real = [r for r in recs if not r.get("dry")]
     if not real:
         return False

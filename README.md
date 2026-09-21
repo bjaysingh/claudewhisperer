@@ -45,8 +45,9 @@ the hook on:
 
 - every prompt is triaged before it reaches Claude; prompts that are already tight, short replies, corrections,
   and routine follow-ups ("commit and push") pass through untouched; the rest get a nudge to apply the pass,
-  with the analysis already done. On heuristics alone this costs 70-80 ms (measured at 5k logged prompts;
-  ~150 ms at 50k, since the repetition check scans the fingerprint file). **With Jev enabled the hook makes up
+  with the analysis already done. On heuristics alone this costs 70-80 ms, and stays there:
+  `prompts.jsonl` self-trims to the newest `max_prompts_retained` (5000) records, so the cost does not drift
+  upward with use. `/whisper stats` reports the hook's own median/p95/max, measured rather than assumed. **With Jev enabled the hook makes up
   to three sequential API calls** - labelling your last run, triaging this prompt, classifying the follow-up -
   each bounded by `timeout_s` (2.5 s), so a stalled network can add several seconds before your prompt is sent.
   The hook entry is registered with an 8 s timeout. Lower `jev.timeout_s` in `memory/config.json` if you would
@@ -102,6 +103,9 @@ deliberate bump, run `python3 tests/run_cases.py --jev` and read the diff before
 - `memory/log.jsonl`: one record per run: task type, tokens before/after, transforms applied, rules applied, gate,
   outcome, cause, follow-up turns, reply length. No prompt text by default.
 - `memory/prompts.jsonl`: content-word fingerprints of prompts seen by the hook, for repetition detection.
+  A rolling window, not a history: it trims to the newest 5000 records (`max_prompts_retained`) once it passes
+  `prompts_max_bytes`. That is deliberate - a prompt you repeated months ago is not a current habit worth a
+  shortcut - and it keeps the per-prompt hook cost flat. The run log is never trimmed; it is the evidence.
 - `memory/config.json`: thresholds and privacy switches (`store_previews`, `store_prompts` default off).
 
 Evidence rules: only explicit corrections and approvals drive rule promotion. "The user moved on" is recorded

@@ -128,12 +128,20 @@ Every Jev decision has a paired heuristic fallback in the same file (`triage_heu
 counted in `memory/jev_status.json`, and the heuristic answers instead. Thresholds live in `memory/config.json`
 (`task_min_confidence`, `label_min_confidence`, `intent_drop_pause_at`), never hardcoded.
 
+### Cost of the hook
+
+`prompts.jsonl` is a rebuildable cache, pruned to a rolling window by `prune_prompts()` (O(1) size check,
+rare rewrite). `log.jsonl` is never pruned — it is what `learn` reasons over. The hook reads the log once and
+passes the records to `analyze_prompt(log_records=...)` so `learn_due` does not read it again, and records its
+own elapsed time as `hook_ms`, which `cmd_log` copies onto the run and `stats` reports as median/p95/max.
+Optimise when that p95 climbs, not on suspicion.
+
 ### Saved cases
 
 `tests/cases/prompts.json` is the regression set for the analysis layer: real prompts, ugly ones included, each
-with a `why`, the deterministic `expect`ations, and `must_keep` strings the rewrite may never drop. Three cases
-carry a `known_gap`: the expectation pins what the heuristic *does* while the field records what it *should*
-say, so the set never quietly blesses a defect. `run_cases.py` replays them and diffs against
+with a `why`, the deterministic `expect`ations, and `must_keep` strings the rewrite may never drop. A case may carry a
+`known_gap`: the expectation then pins what the heuristic *does* while the field records what it *should* say,
+so the set never quietly blesses a defect (none are open right now). `run_cases.py` replays them and diffs against
 `tests/cases_snapshot.json`, exiting 1 on drift — that is the check to run when the Jev model version moves,
 before a user sees new behavior.
 

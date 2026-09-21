@@ -115,6 +115,7 @@ def cmd_log(args) -> None:
         "note": "",
         "labeled_by": "",
         "reply_chars": None,
+        "hook_ms": analysis.get("hook_ms"),   # how long the hook held the prompt, when it ran
         "followups": 0,          # user turns before the user moved on to a new task
         "questions_asked": 0,    # of those, turns that were answers to a question Claude asked
         "followup_kind": None,   # what the user asked for right after (commit/tests/docs/...) - learnable
@@ -396,6 +397,15 @@ def cmd_learnings(args) -> None:
 
 # ------------------------------------------------------------------ stats
 
+def _latency(recs) -> dict:
+    """What the hook costs the user, measured. Prune/optimise when p95 climbs, not before."""
+    xs = sorted(int(r["hook_ms"]) for r in recs if r.get("hook_ms") is not None)
+    if not xs:
+        return {"samples": 0}
+    return {"samples": len(xs), "median": xs[len(xs) // 2], "p95": xs[min(len(xs) - 1, int(len(xs) * 0.95))],
+            "max": xs[-1]}
+
+
 def cmd_stats(args) -> None:
     W.ensure_memory()
     all_recs = W.read_log()
@@ -446,6 +456,7 @@ def cmd_stats(args) -> None:
         "causes": dict(causes),
         "gate": dict(Counter(r.get("gate") for r in recs)),
         "avg_reply_chars": int(sum(replies) / len(replies)) if replies else None,
+        "hook_ms": _latency(recs),
         "avg_followup_turns": round(sum(fups) / len(fups), 2) if fups else None,
         "questions_claude_asked": sum(int(r.get("questions_asked", 0)) for r in closed),
         "followup_kinds": dict(Counter(r.get("followup_kind") for r in closed if r.get("followup_kind"))),

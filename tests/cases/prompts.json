@@ -53,13 +53,12 @@
         "schema",
         "deploy"
       ],
-      "task_type": "refactor"
+      "task_type": "ops"
     },
     "must_keep": [
       "legacy_sessions",
       "production"
-    ],
-    "known_gap": "classified `refactor`: 'clean up' matches the refactor keyword and outranks the drop-table/production/redeploy signals. Should be `ops`. Risk flags fire correctly, so the guardrail still holds; only the reply budget and rule sort are wrong. `clean up the old release branches` also raises no `delete` flag: the pattern wants an explicit delete verb."
+    ]
   },
   {
     "name": "several-independent-tasks",
@@ -81,13 +80,12 @@
     "prompt": "cache the user lookup in the profile endpoint so repeated hits don't re-query, and also explain what you changed and why it is safe under concurrent requests",
     "expect": {
       "multi_task_hint": false,
-      "task_type": "explain"
+      "task_type": "feature"
     },
     "must_keep": [
       "explain",
       "concurrent"
-    ],
-    "known_gap": "classified `explain`: the trailing output request outscores the task itself. SKILL.md step 2 says an 'also explain' is an output request for the one task, so the heuristic contradicts the documented intent. Should be `feature`."
+    ]
   },
   {
     "name": "pasted-code-block",
@@ -157,12 +155,11 @@
     "why": "An explicit boundary is never optimised away.",
     "prompt": "review the changes on this branch for correctness only - do not touch the formatting and do not refactor anything while you are in there",
     "expect": {
-      "task_type": "refactor"
+      "task_type": "review"
     },
     "must_keep": [
       "do not touch",
       "correctness only"
-    ],
-    "known_gap": "classified `refactor` off the word in 'do not refactor anything'. Keyword counting has no notion of negation, and refactor wins the tie-break against review. Should be `review`."
+    ]
   }
 ]

@@ -47,7 +47,7 @@
       "fenced_blocks": 0
     },
     "destructive-ops": {
-      "task_type": "refactor",
+      "task_type": "ops",
       "task_type_source": "heuristic",
       "triage": "light",
       "triage_source": "heuristic",
@@ -78,7 +78,7 @@
       "fenced_blocks": 0
     },
     "also-explain-is-not-a-second-task": {
-      "task_type": "explain",
+      "task_type": "feature",
       "task_type_source": "heuristic",
       "triage": "light",
       "triage_source": "heuristic",
@@ -164,7 +164,7 @@
       "fenced_blocks": 0
     },
     "review-with-scope-boundary": {
-      "task_type": "refactor",
+      "task_type": "review",
       "task_type_source": "heuristic",
       "triage": "light",
       "triage_source": "heuristic",
