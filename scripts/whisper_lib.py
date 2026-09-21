@@ -46,7 +46,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "hook": {"skip_under_words": 7},
     "jev": {
         "enabled": True,
-        "model": "jev-latest",
+        # pinned, not `jev-latest`: the thresholds below are tuned against whatever model answered
+        # last, and an alias moves without a change on your side. Bump it deliberately, then run
+        # `python3 tests/run_cases.py --jev` and read the diff before shipping.
+        "model": "jev-1.13.0",
         "endpoint": "https://api.typesafe.ai/v1/systemone",
         "timeout_s": 2.5,
         "task_min_confidence": 0.55,   # below this, fall back to the keyword heuristic
@@ -649,18 +652,43 @@ def jev_available(cfg: Dict[str, Any]) -> bool:
     return bool(cfg["jev"].get("enabled", True)) and bool(os.environ.get("TYPESAFE_API_KEY"))
 
 
-def _jev_status_update(ok: bool, ms: int, err: str = "") -> None:
+def read_jev_status() -> Dict[str, Any]:
     try:
-        st = {}
-        if os.path.exists(JEV_STATUS_PATH):
-            with open(JEV_STATUS_PATH, encoding="utf-8") as f:
-                st = json.load(f)
-        st["calls"] = st.get("calls", 0) + 1
-        st["failures"] = st.get("failures", 0) + (0 if ok else 1)
-        st["last_ms"] = ms
-        st["last_error"] = err[:200] if err else ""
-        st["last_at"] = now_iso()
-        write_json(JEV_STATUS_PATH, st)
+        with open(JEV_STATUS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _jev_status_update(ok: bool, ms: int, err: str = "", data: Optional[Dict[str, Any]] = None,
+                       requested: str = "") -> None:
+    """Counters plus the model that actually answered.
+
+    The response carries a top-level `model`. Recording it is the only way to notice that a tuned
+    threshold is now being applied to a different model's probabilities."""
+    try:
+        with memory_lock(timeout_s=1.0):
+            st = read_jev_status()
+            st["calls"] = st.get("calls", 0) + 1
+            st["failures"] = st.get("failures", 0) + (0 if ok else 1)
+            st["last_ms"] = ms
+            st["last_error"] = err[:200] if err else ""
+            st["last_at"] = now_iso()
+            if data:
+                reported = data.get("model") or ""
+                if reported:
+                    st["model_reported"] = reported
+                    st["model_requested"] = requested
+                    seen = st.setdefault("models_seen", {})
+                    seen[reported] = int(seen.get(reported, 0)) + 1
+                    # an alias is expected to resolve to something else; a pinned id is not
+                    st["version_drift"] = bool(requested and not requested.endswith(("latest", "preview"))
+                                               and reported != requested)
+                usage = data.get("usage") or {}
+                if usage:
+                    st["tokens_in_total"] = st.get("tokens_in_total", 0) + int(usage.get("input_tokens", 0) or 0)
+                    st["tokens_out_total"] = st.get("tokens_out_total", 0) + int(usage.get("output_tokens", 0) or 0)
+            write_json(JEV_STATUS_PATH, st)
     except Exception:
         pass
 
@@ -678,7 +706,7 @@ def jev_ask(state: Any, questions: Dict[str, Dict[str, Any]], cfg: Dict[str, Any
     try:
         with urllib.request.urlopen(req, timeout=cfg["jev"]["timeout_s"]) as r:
             data = json.load(r)
-        _jev_status_update(True, int((time.time() - t0) * 1000))
+        _jev_status_update(True, int((time.time() - t0) * 1000), data=data, requested=cfg["jev"]["model"])
         return data.get("answers")
     except urllib.error.HTTPError as e:
         _jev_status_update(False, int((time.time() - t0) * 1000), "HTTP %s" % e.code)
@@ -803,11 +831,14 @@ def analyze_prompt(prompt: str, cwd: str, cfg: Dict[str, Any], use_jev: bool = T
     tri, why = triage_heuristic(prompt, a, cfg)
     a["triage"] = {"value": tri, "source": "heuristic", "reason": why}
 
-    a["jev"] = {"available": jev_available(cfg), "used": False}
+    a["jev"] = {"available": jev_available(cfg), "used": False, "model": cfg["jev"]["model"]}
     if use_jev and a["jev"]["available"] and tri != "skip":
         answers = jev_ask({"prompt": prompt[:12000]}, Q_ANALYZE, cfg)
         if answers:
             a["jev"]["used"] = True
+            st = read_jev_status()
+            a["jev"]["model_answered"] = st.get("model_reported", "")
+            a["jev"]["version_drift"] = bool(st.get("version_drift"))
             t = _answer(answers, "triage")
             if t and t.get("choice") and (t.get("confidence") or 0) >= cfg["jev"]["task_min_confidence"]:
                 a["triage"] = {"value": t["choice"], "source": "jev", "confidence": round(t.get("confidence", 0), 2), "reason": "jev"}

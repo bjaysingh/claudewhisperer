@@ -42,7 +42,10 @@ learning log stays free of synthetic runs.
 - **Stdlib only, Python 3.9+.** No third-party imports anywhere, including the Jev client (`urllib.request`).
   The hook runs on every user prompt with a ~50 ms budget; an import cost is paid per prompt.
 - **Hooks never block.** `hooks/*.py` wrap everything in `try/except` and return silently on any failure. A hook
-  that raises, prints garbage, or exits non-zero breaks the user's session.
+  that raises, prints garbage, or exits non-zero breaks the user's session. Mind the latency budget: the
+  UserPromptSubmit hook sits between the user pressing enter and Claude seeing the prompt. Heuristics cost
+  70–150 ms; with Jev enabled it makes up to three sequential API calls, each bounded by `jev.timeout_s`.
+  Adding a fourth, or raising that timeout, is a user-visible stall.
 - **Memory is best-effort.** No script call may fail the task it is attached to.
 - **Every read-modify-write of a memory file goes inside `with W.memory_lock():`** (`whisper_lib.py`). Several
   Claude Code sessions share one memory dir and both hooks fire per prompt, so an unserialised
@@ -113,6 +116,12 @@ string used for detection and removal; a `.whisperer.bak` backup is written next
 Active when `TYPESAFE_API_KEY` is set. A decision model: typed answers with confidence, no text generation.
 All questions live in `whisper_lib.py` as `Q_ANALYZE`, `Q_GATE`, `Q_OUTCOME`, `Q_FOLLOWUP` — one place, so both
 questions and thresholds can be reviewed without searching. Do not inline a question at its call site.
+
+The model is pinned to an exact version in `DEFAULT_CONFIG`, never an alias (`jev-latest`/`jev-preview`), and
+`_jev_status_update()` records the `model` each response reports into `memory/jev_status.json`. A pinned request
+answered by a different version sets `version_drift`, which `/whisper setup` and `jev-check` surface as a
+warning — every threshold in `config.json` was tuned against the old one. A bump means: change the pin, run
+`python3 tests/run_cases.py --jev`, read the diff, then re-tune.
 
 Every Jev decision has a paired heuristic fallback in the same file (`triage_heuristic`, `task_type_heuristic`,
 `find_risks`, `correction_heuristic`, `followup_heuristic`). A slow (>`timeout_s`) or failed call is swallowed,

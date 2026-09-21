@@ -557,6 +557,9 @@ def cmd_setup(args) -> None:
             "enabled_in_config": cfg["jev"].get("enabled", True),
             "api_key_present": bool(os.environ.get("TYPESAFE_API_KEY")),
             "python_sdk_importable": sdk,
+            "model_pinned": cfg["jev"]["model"],
+            "model_is_an_alias": cfg["jev"]["model"].endswith(("latest", "preview")),
+            **_version_state(cfg),
             **_plugin_hint(),
             "how_to_enable": "export TYPESAFE_API_KEY=... (the skill calls the HTTP API directly; the SDK and plugin are optional)",
         },
@@ -565,13 +568,37 @@ def cmd_setup(args) -> None:
     })
 
 
+def _version_state(cfg) -> dict:
+    """What actually answered last, versus what config.json asks for.
+
+    Thresholds are tuned per model, so a silent version change invalidates them."""
+    st = W.read_jev_status()
+    state = {
+        "model_answered_last": st.get("model_reported", ""),
+        "calls": st.get("calls", 0),
+        "failures": st.get("failures", 0),
+        "last_ms": st.get("last_ms"),
+        "models_seen": st.get("models_seen", {}),
+    }
+    if st.get("version_drift"):
+        state["warning"] = ("model drift: config asks for %s, the API answered as %s. Every threshold in "
+                            "memory/config.json was tuned against the old one - run "
+                            "`python3 tests/run_cases.py --jev` and read the diff before trusting them."
+                            % (st.get("model_requested"), st.get("model_reported")))
+    elif cfg["jev"]["model"].endswith(("latest", "preview")):
+        state["warning"] = ("model is the floating alias `%s`; it moves without a change on your side and "
+                            "silently invalidates the tuned thresholds. Pin the version it reports."
+                            % cfg["jev"]["model"])
+    return state
+
+
 def cmd_jev_check(args) -> None:
     cfg = W.load_config()
     if not W.jev_available(cfg):
         out({"ok": False, "reason": "TYPESAFE_API_KEY not set or jev disabled in memory/config.json"})
         return
     ans = W.jev_ask({"prompt": "hey could you please fix the failing login test, it's driving me crazy, thanks!"}, W.Q_ANALYZE, cfg)
-    out({"ok": bool(ans), "answers": ans})
+    out({"ok": bool(ans), "requested_model": cfg["jev"]["model"], **_version_state(cfg), "answers": ans})
 
 
 # ------------------------------------------------------------------ main

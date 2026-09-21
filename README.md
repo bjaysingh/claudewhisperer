@@ -43,9 +43,14 @@ python3 ~/.claude/skills/whisper/scripts/whisper.py hook on     # or /whisper ho
 This adds a `UserPromptSubmit` and a `Stop` hook to `~/.claude/settings.json` (backup written next to it). With
 the hook on:
 
-- every prompt is triaged in ~50 ms (Jev, if configured, or heuristics); prompts that are already tight, short
-  replies, corrections, and routine follow-ups ("commit and push") pass through untouched; the rest get a nudge
-  to apply the pass, with the analysis already done;
+- every prompt is triaged before it reaches Claude; prompts that are already tight, short replies, corrections,
+  and routine follow-ups ("commit and push") pass through untouched; the rest get a nudge to apply the pass,
+  with the analysis already done. On heuristics alone this costs 70-80 ms (measured at 5k logged prompts;
+  ~150 ms at 50k, since the repetition check scans the fingerprint file). **With Jev enabled the hook makes up
+  to three sequential API calls** - labelling your last run, triaging this prompt, classifying the follow-up -
+  each bounded by `timeout_s` (2.5 s), so a stalled network can add several seconds before your prompt is sent.
+  The hook entry is registered with an 8 s timeout. Lower `jev.timeout_s` in `memory/config.json` if you would
+  rather lose the classification than wait for it;
 - your next message after a Whisperer run is labeled automatically (correction / new task / approval), which is
   the learning signal; follow-up turns and questions Claude asked are counted;
 - repeated prompts are detected from a content-word fingerprint (not the text) and offered as shortcuts;
@@ -82,6 +87,11 @@ The scripts call `POST https://api.typesafe.ai/v1/systemone` with the stdlib; th
 information only). Thresholds live in `memory/config.json`: `task_min_confidence` (0.55), `label_min_confidence`
 (0.6), `intent_drop_pause_at` (0.35, deliberately low: silently dropping intent costs more than an extra `go`).
 A slow (>2.5 s) or failed call is ignored and counted in `stats`.
+
+The model is **pinned** (`jev-1.13.0`), not set to the `jev-latest` alias: every threshold above is tuned
+against whatever model answered last, and an alias moves without a change on your side. Whisperer records the
+`model` each response reports, and `/whisper setup` warns when it stops matching the pinned id. After a
+deliberate bump, run `python3 tests/run_cases.py --jev` and read the diff before trusting the thresholds.
 
 ## What it learns, and where
 
