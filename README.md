@@ -118,6 +118,18 @@ whisper/
 `memory/` is not in the repository: it is created with defaults on the first run and holds only your own
 learning state.
 
+## Development
+
+```bash
+cd tests && python3 -m unittest discover -p 'test_*.py'   # ~1s, stdlib only
+cd tests && python3 run_cases.py                          # replay the saved prompt cases
+```
+
+`tests/cases/prompts.json` holds the saved prompts the analysis layer is tuned against, ugly ones included.
+`run_cases.py` diffs a replay against `tests/cases_snapshot.json` and exits 1 on drift; run it with `--jev`
+after changing the Jev model or any threshold in `memory/config.json`, because those are tuned against
+whatever model answered last. Tests write to a temp `WHISPERER_HOME`, never your real `memory/`.
+
 ## Design notes
 
 - `disable-model-invocation: true`: it runs only when you call it or when the hook you enabled nudges it.

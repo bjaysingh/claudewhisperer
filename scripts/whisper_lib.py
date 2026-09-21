@@ -4,6 +4,7 @@ Stdlib only. Python 3.9+ (macOS system python works).
 Everything here is deterministic except the optional Jev calls, which
 degrade to heuristics when TYPESAFE_API_KEY is absent or the call fails.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -16,6 +17,11 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    import fcntl
+except ImportError:      # non-POSIX; locking degrades to last-writer-wins
+    fcntl = None
+
 # --------------------------------------------------------------------------- paths
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,7 +32,9 @@ CONFIG_PATH = os.path.join(MEMORY_DIR, "config.json")
 PENDING_DIR = os.path.join(MEMORY_DIR, "pending")
 JEV_STATUS_PATH = os.path.join(MEMORY_DIR, "jev_status.json")
 SHORTCUTS_PATH = os.path.join(MEMORY_DIR, "shortcuts.json")
-PROMPTS_PATH = os.path.join(MEMORY_DIR, "prompts.jsonl")   # fingerprints of every prompt seen by the hook (for repetition detection)
+PROMPTS_PATH = os.path.join(MEMORY_DIR, "prompts.jsonl")
+LOCK_PATH = os.path.join(MEMORY_DIR, ".lock")
+_LOCK_DEPTH = 0                 # re-entrancy counter for memory_lock()   # fingerprints of every prompt seen by the hook (for repetition detection)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "consolidate_every": 10,      # run `learn` after this many new runs
@@ -81,11 +89,75 @@ def load_config() -> Dict[str, Any]:
     return cfg
 
 
+def atomic_write(path: str, text: str) -> None:
+    """Write via a per-process temp file. The pid suffix matters: two sessions share one memory
+    dir, and a shared temp name lets one process' os.replace pull the file out from under another."""
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_json(path: str, data: Any) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False))
+
+
+@contextlib.contextmanager
+def memory_lock(timeout_s: float = 3.0):
+    """Serialise a read-modify-write of the memory files across processes.
+
+    Both hooks and the CLI read a whole file, mutate it and write it back, and several Claude Code
+    sessions share one memory dir, so without this the last writer wins and the other's labels are
+    lost. Best-effort by contract: if the lock cannot be taken in time it yields anyway, because
+    memory must never block the task it is attached to."""
+    global _LOCK_DEPTH
+    if _LOCK_DEPTH > 0:      # re-entrant: flock is per open-file-description, so a second
+        _LOCK_DEPTH += 1     # handle in this process would block against our own lock
+        try:
+            yield
+        finally:
+            _LOCK_DEPTH -= 1
+        return
+    ensure_memory()
+    handle = None
+    if fcntl is not None:
+        try:
+            handle = open(LOCK_PATH, "a+")
+            deadline = time.time() + timeout_s
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.time() >= deadline:
+                        break
+                    time.sleep(0.01)
+        except Exception:
+            handle = None
+    _LOCK_DEPTH += 1
+    try:
+        yield
+    finally:
+        _LOCK_DEPTH -= 1
+        if handle is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            handle.close()
+
+
+def one_line(text: str) -> str:
+    """Collapse to a single line. learnings.md is line-oriented (RULE_RE is line-anchored), so a
+    newline inside a rule silently truncates it at the next parse and drops the rest on the next save."""
+    return re.sub(r"\s+", " ", (text or "").replace("\r", " ")).strip()
 
 
 def read_stdin_text() -> str:
@@ -132,7 +204,8 @@ FILLER_GROUPS: Dict[str, List[str]] = {
 
 RISK_PATTERNS: Dict[str, str] = {
     "delete": r"\b(delete|remove|rm\s+-rf?|rmdir|unlink|purge|wipe)\b",
-    "schema": r"\b(drop\s+(table|column|database|index)|migrations?|migrate|alter\s+table|truncate)\b",
+    # `drop table x` is SQL word order; people write "drop the sessions table", so allow words between
+    "schema": r"\b((drop|delete)\s+(?:\w+\s+){0,3}(tables?|columns?|databases?|indexe?s?)|migrations?|migrate|alter\s+table|truncate)\b",
     "git_destructive": r"(force[- ]push|push\s+--force|--force-with-lease|reset\s+--hard|git\s+push|filter-branch|rebase\s+-i|history\s+rewrite)",
     "deploy": r"\b(deploy|release|publish|ship(ping)? to prod|production|\bprod\b|rollout)\b",
     "external_effects": r"\b(send (an? |the )?(email|message|slack|sms|notification)|post to|payment|charge|invoice|webhook|tweet)\b",
@@ -460,7 +533,7 @@ def save_shortcuts(d: Dict[str, Dict[str, Any]]) -> None:
 def match_shortcut(prompt: str, shortcuts: Dict[str, Dict[str, Any]]) -> Optional[str]:
     """Exact match on the shortcut key (case-insensitive, trailing punctuation ignored)."""
     key = re.sub(r"[\s.!?]+$", "", prompt.strip().lower())
-    key = key[1:] if key.startswith("/whisper ") else key
+    key = key[len("/whisper "):] if key.startswith("/whisper ") else key
     for k in shortcuts:
         if key == k.lower():
             return k
@@ -827,7 +900,7 @@ def render_learnings(sections: Dict[str, List[Dict[str, Any]]]) -> str:
                 meta.append("applied %d" % e.get("applied", 0))
                 meta.append("corrections %d" % e.get("corrections", 0))
             meta.extend(e.get("extra", []))
-            out.append("- [%s] (%s) %s" % (e["id"], ", ".join(m for m in meta if m != ""), e["text"]))
+            out.append("- [%s] (%s) %s" % (e["id"], ", ".join(m for m in meta if m != ""), one_line(e["text"])))
         out.append("")
     return "\n".join(out).rstrip("\n") + "\n"
 
@@ -837,10 +910,7 @@ def load_rules() -> Dict[str, List[Dict[str, Any]]]:
 
 
 def save_rules(sections: Dict[str, List[Dict[str, Any]]]) -> None:
-    tmp = LEARNINGS_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(render_learnings(sections))
-    os.replace(tmp, LEARNINGS_PATH)
+    atomic_write(LEARNINGS_PATH, render_learnings(sections))
 
 
 def next_id(sections: Dict[str, List[Dict[str, Any]]], kind: str) -> str:
@@ -855,7 +925,7 @@ def relevant_rules(sections: Dict[str, List[Dict[str, Any]]], analysis: Dict[str
     def key(e: Dict[str, Any]) -> int:
         txt = e["text"].lower()
         score = 0
-        if tt and ("task=" + tt) in txt or ("[" + tt + "]") in txt:
+        if tt and (("task=" + tt) in txt or ("[" + tt + "]") in txt):
             score -= 2
         if proj and proj.lower() in txt:
             score -= 3
@@ -867,11 +937,12 @@ def relevant_rules(sections: Dict[str, List[Dict[str, Any]]], analysis: Dict[str
 def bump_rules(ids: List[str], field: str) -> None:
     if not ids:
         return
-    sections = load_rules()
-    for e in sections["Rules"]:
-        if e["id"] in ids:
-            e[field] = int(e.get(field, 0)) + 1
-    save_rules(sections)
+    with memory_lock():
+        sections = load_rules()
+        for e in sections["Rules"]:
+            if e["id"] in ids:
+                e[field] = int(e.get(field, 0)) + 1
+        save_rules(sections)
 
 
 # --------------------------------------------------------------------------- log
@@ -898,11 +969,7 @@ def append_log(rec: Dict[str, Any]) -> None:
 
 
 def rewrite_log(records: List[Dict[str, Any]]) -> None:
-    tmp = LOG_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    os.replace(tmp, LOG_PATH)
+    atomic_write(LOG_PATH, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
 
 
 def find_pending(records: List[Dict[str, Any]], session: Optional[str] = None, max_age_s: int = 6 * 3600) -> Optional[int]:

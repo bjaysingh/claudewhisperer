@@ -1,0 +1,168 @@
+[
+  {
+    "name": "chatty-bugfix",
+    "why": "The common case: a real ask buried in greeting, hedging and meta-instructions.",
+    "prompt": "hey claude! hope you're doing well. so i think maybe the login thing is broken? it 500s when the token is expired and it should really just be a 401. please be careful not to break anything and think step by step. thanks so much!",
+    "expect": {
+      "task_type": "bugfix",
+      "triage": "full",
+      "filler_at_least": 8,
+      "multi_task_hint": false,
+      "secrets_detected": false
+    },
+    "must_keep": [
+      "500",
+      "401",
+      "expired"
+    ]
+  },
+  {
+    "name": "terse-bugfix",
+    "why": "Already tight. The pass should add done-criteria, not subtract, so triage is light.",
+    "prompt": "auth middleware rejects valid tokens after midnight UTC",
+    "expect": {
+      "task_type": "other",
+      "triage": "light",
+      "filler_at_least": 0
+    },
+    "must_keep": [
+      "midnight UTC"
+    ]
+  },
+  {
+    "name": "credentials-in-prompt",
+    "why": "Ugly case. A pasted key must be detected so the rewrite strips it and nothing lands in memory.",
+    "prompt": "the deploy keeps failing, here is the config we use: AWS_SECRET=AKIAIOSFODNN7EXAMPLE and the db is at postgres://admin:hunter2@db.internal:5432/app - figure out why the migration step dies",
+    "expect": {
+      "secrets_detected": true,
+      "risk_flags_include": [
+        "schema",
+        "deploy"
+      ]
+    },
+    "must_keep": [
+      "migration step"
+    ]
+  },
+  {
+    "name": "destructive-ops",
+    "why": "Guardrail case: the rewrite has to name the specific destructive action to confirm.",
+    "prompt": "clean up the old release branches and drop the legacy_sessions table from production, then redeploy",
+    "expect": {
+      "risk_flags_include": [
+        "schema",
+        "deploy"
+      ],
+      "task_type": "refactor"
+    },
+    "must_keep": [
+      "legacy_sessions",
+      "production"
+    ],
+    "known_gap": "classified `refactor`: 'clean up' matches the refactor keyword and outranks the drop-table/production/redeploy signals. Should be `ops`. Risk flags fire correctly, so the guardrail still holds; only the reply budget and rule sort are wrong. `clean up the old release branches` also raises no `delete` flag: the pattern wants an explicit delete verb."
+  },
+  {
+    "name": "several-independent-tasks",
+    "why": "Numbered steps, not one blurred task. Every ask has to survive the rewrite.",
+    "prompt": "add a --json flag to the export command, and then update the changelog for it, and also bump the version to 2.4.0 before you finish the whole thing off",
+    "expect": {
+      "multi_task_hint": true,
+      "task_type": "feature"
+    },
+    "must_keep": [
+      "--json",
+      "2.4.0",
+      "changelog"
+    ]
+  },
+  {
+    "name": "also-explain-is-not-a-second-task",
+    "why": "`also explain` is an output request on one task; splitting it into steps is the failure mode.",
+    "prompt": "cache the user lookup in the profile endpoint so repeated hits don't re-query, and also explain what you changed and why it is safe under concurrent requests",
+    "expect": {
+      "multi_task_hint": false,
+      "task_type": "explain"
+    },
+    "must_keep": [
+      "explain",
+      "concurrent"
+    ],
+    "known_gap": "classified `explain`: the trailing output request outscores the task itself. SKILL.md step 2 says an 'also explain' is an output request for the one task, so the heuristic contradicts the documented intent. Should be `feature`."
+  },
+  {
+    "name": "pasted-code-block",
+    "why": "Pasted code should be recognised so the rewrite can point at a path instead of re-pasting.",
+    "prompt": "this function is wrong somehow:\n\n```python\ndef refresh_token(session):\n    if session.expires_at < now():\n        raise Error('expired')\n    return session.token\n```\n\nit throws a plain Error and the caller turns that into a 500",
+    "expect": {
+      "fenced_blocks_at_least": 1,
+      "task_type": "bugfix"
+    },
+    "must_keep": [
+      "refresh_token",
+      "500"
+    ]
+  },
+  {
+    "name": "named-file-that-does-not-exist",
+    "why": "A path the user misremembered must become a locate-first step, never an assumption.",
+    "prompt": "update the retry logic in src/net/retry_policy.ts so it backs off exponentially instead of a flat 200ms",
+    "expect": {
+      "paths_missing_include": [
+        "src/net/retry_policy.ts"
+      ],
+      "task_type": "other"
+    },
+    "must_keep": [
+      "200ms",
+      "exponentially"
+    ]
+  },
+  {
+    "name": "restates-claude-md",
+    "why": "Context already in CLAUDE.md is duplicated context; the analysis has to spot the sentence.",
+    "prompt": "add a health check endpoint. remember that we always run the full test suite before committing and that every new endpoint needs an entry in the OpenAPI spec.",
+    "claude_md": "We always run the full test suite before committing. Every new endpoint needs an entry in the OpenAPI spec.",
+    "expect": {
+      "claude_md_overlap_at_least": 1,
+      "task_type": "feature"
+    },
+    "must_keep": [
+      "health check"
+    ]
+  },
+  {
+    "name": "acknowledgement",
+    "why": "Rewriting an ack costs a turn instead of saving one.",
+    "prompt": "yes go ahead",
+    "expect": {
+      "triage": "skip"
+    },
+    "must_keep": []
+  },
+  {
+    "name": "question-not-a-task",
+    "why": "Explain-type work gets a prose budget, not a files-changed report.",
+    "prompt": "why does the scheduler run every job twice on the first tick after a restart? walk me through what happens during startup",
+    "expect": {
+      "task_type": "explain",
+      "triage": "light"
+    },
+    "must_keep": [
+      "first tick",
+      "restart"
+    ]
+  },
+  {
+    "name": "review-with-scope-boundary",
+    "why": "An explicit boundary is never optimised away.",
+    "prompt": "review the changes on this branch for correctness only - do not touch the formatting and do not refactor anything while you are in there",
+    "expect": {
+      "task_type": "refactor"
+    },
+    "must_keep": [
+      "do not touch",
+      "correctness only"
+    ],
+    "known_gap": "classified `refactor` off the word in 'do not refactor anything'. Keyword counting has no notion of negation, and refactor wins the tie-break against review. Should be `review`."
+  }
+]

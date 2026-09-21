@@ -123,22 +123,23 @@ def cmd_log(args) -> None:
         "fp": analysis.get("fingerprint") or W.fingerprint(original),
         "preview": (analysis.get("preview") or W.redact_secrets(original)[: cfg["preview_chars"]]) if cfg.get("store_previews") else "",
     }
-    # a new run closes any previous open run in this session (the user moved on)
-    if not args.dry:
-        recs = W.read_log()
-        changed = False
-        for r in recs:
-            if not r.get("closed") and not r.get("dry") and (r.get("session") or "") == (args.session or ""):
-                r["closed"] = True
-                if r.get("outcome") is None:
-                    r["outcome"], r["labeled_by"] = "ok_implicit", "next-run"
-                changed = True
-        if changed:
-            W.rewrite_log(recs)
     if cfg.get("store_prompts"):
         rec["original"] = W.redact_secrets(original)
         rec["rewritten"] = W.redact_secrets(rewritten)
-    W.append_log(rec)
+    # a new run closes any previous open run in this session (the user moved on)
+    with W.memory_lock():
+        if not args.dry:
+            recs = W.read_log()
+            changed = False
+            for r in recs:
+                if not r.get("closed") and not r.get("dry") and (r.get("session") or "") == (args.session or ""):
+                    r["closed"] = True
+                    if r.get("outcome") is None:
+                        r["outcome"], r["labeled_by"] = "ok_implicit", "next-run"
+                    changed = True
+            if changed:
+                W.rewrite_log(recs)
+        W.append_log(rec)
     W.bump_rules(rules, "applied")
     if args.analysis:
         try:
@@ -153,6 +154,11 @@ def cmd_log(args) -> None:
 
 def cmd_outcome(args) -> None:
     W.ensure_memory()
+    with W.memory_lock():
+        _label_run(args)
+
+
+def _label_run(args) -> None:
     recs = W.read_log()
     idx = None
     if args.run:
@@ -188,6 +194,11 @@ def cmd_outcome(args) -> None:
 # ------------------------------------------------------------------ shortcuts
 
 def cmd_shortcut(args) -> None:
+    with W.memory_lock():
+        _apply_shortcut_op(args)
+
+
+def _apply_shortcut_op(args) -> None:
     sc = W.load_shortcuts()
     if args.op == "list":
         out({k: {"expands_to": v.get("expands_to"), "uses": v.get("uses", 0), "created": v.get("created")} for k, v in sc.items()})
@@ -220,6 +231,11 @@ def cmd_shortcut(args) -> None:
 
 def cmd_learn(args) -> None:
     W.ensure_memory()
+    with W.memory_lock():
+        _consolidate(args)
+
+
+def _consolidate(args) -> None:
     cfg = W.load_config()
     all_recs = W.read_log()
     recs = [r for r in all_recs if not r.get("dry")]
@@ -313,7 +329,7 @@ def cmd_learn(args) -> None:
 
     for c in candidates:
         cid = W.next_id(sections, "C")
-        sections["Candidates"].append({"id": cid, "text": c["text"], "source": "auto", "created": datetime.now().strftime("%Y-%m-%d"),
+        sections["Candidates"].append({"id": cid, "text": W.one_line(c["text"]), "source": "auto", "created": datetime.now().strftime("%Y-%m-%d"),
                                        "applied": c["n"], "corrections": 0, "extra": []})
     W.save_rules(sections)
     W.mark_learned()
@@ -330,14 +346,19 @@ def cmd_learn(args) -> None:
 
 def cmd_rule(args) -> None:
     W.ensure_memory()
+    with W.memory_lock():
+        _apply_rule_op(args)
+
+
+def _apply_rule_op(args) -> None:
     sections = W.load_rules()
     today = datetime.now().strftime("%Y-%m-%d")
     if args.op == "add":
         rid = W.next_id(sections, "R")
-        sections["Rules"].append({"id": rid, "text": args.text.strip(), "source": args.source or "user", "created": today,
+        sections["Rules"].append({"id": rid, "text": W.one_line(args.text), "source": args.source or "user", "created": today,
                                   "applied": 0, "corrections": 0, "extra": []})
         W.save_rules(sections)
-        out({"added": rid, "text": args.text.strip()})
+        out({"added": rid, "text": W.one_line(args.text)})
     elif args.op == "promote":
         cand = next((e for e in sections["Candidates"] if e["id"] == args.id), None)
         if not cand:
@@ -345,7 +366,7 @@ def cmd_rule(args) -> None:
             sys.exit(1)
         sections["Candidates"].remove(cand)
         rid = W.next_id(sections, "R")
-        sections["Rules"].append({"id": rid, "text": (args.text or cand["text"]).strip(), "source": "auto", "created": today,
+        sections["Rules"].append({"id": rid, "text": W.one_line(args.text or cand["text"]), "source": "auto", "created": today,
                                   "applied": 0, "corrections": 0, "extra": ["from " + cand["id"]]})
         W.save_rules(sections)
         out({"promoted": cand["id"], "as": rid})

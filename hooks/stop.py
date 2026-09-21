@@ -19,15 +19,16 @@ def main() -> None:
         if not msg:
             return
         import whisper_lib as W
-        recs = W.read_log()
-        idx = W.find_pending(recs, session=session, max_age_s=3 * 3600)
-        if idx is None:
-            return
-        r = recs[idx]
-        if r.get("reply_chars") is None:
-            r["reply_chars"] = len(msg)
-            r["reply_lines"] = msg.count("\n") + 1
-            W.rewrite_log(recs)
+        with W.memory_lock(timeout_s=1.0):
+            recs = W.read_log()
+            idx = W.find_pending(recs, session=session, max_age_s=3 * 3600)
+            if idx is None:
+                return
+            r = recs[idx]
+            if r.get("reply_chars") is None:
+                r["reply_chars"] = len(msg)
+                r["reply_lines"] = msg.count("\n") + 1
+                W.rewrite_log(recs)
     except Exception:
         return
 

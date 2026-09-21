@@ -44,49 +44,49 @@ def main() -> None:
 
     # 1. learning loop: label the previous open run
     try:
-        recs = W.read_log()
-        idx = W.find_pending(recs, session=session)
-        if idx is not None:
-            r = recs[idx]
-            kind, cause = W.correction_heuristic(prompt)
-            dissatisfied = None
-            labeled_by = "hook-heuristic"
-            if W.jev_available(cfg) and not W.is_ack(prompt, cfg["hook"]["skip_under_words"]):
-                ans = W.jev_ask({"PREVIOUS": {"task_type": r.get("task_type"), "gate": r.get("gate")}, "NEW": prompt[:6000]}, W.Q_OUTCOME, cfg)
-                k = W._answer(ans, "kind")
-                if k and k.get("choice") and (k.get("confidence") or 0) >= cfg["jev"]["label_min_confidence"]:
-                    labeled_by = "hook-jev"
-                    kind = {"correction": "correction", "acknowledgement": "ok_explicit", "new_task": "new_task", "reply": "reply"}[k["choice"]]
-                    c = W._answer(ans, "cause")
-                    if kind == "correction" and c and c.get("choice") and c["choice"] != "none":
-                        cause = c["choice"]
-            elif W.is_ack(prompt, cfg["hook"]["skip_under_words"]):
-                low = prompt.lower()
-                kind = "ok_explicit" if any(w in low for w in ("thank", "perfect", "great", "nice", "lgtm", "looks good")) else "reply"
-            r["followups"] = int(r.get("followups", 0)) + 1
-            if kind == "reply":
-                r["questions_asked"] = int(r.get("questions_asked", 0)) + 1
-            elif kind == "correction":
-                if r.get("outcome") in (None, "ok_implicit", "uncertain"):
-                    r["outcome"], r["cause"], r["labeled_by"], r["labeled_at"] = "correction", cause, labeled_by, W.now_iso()
-                    W.bump_rules(r.get("rules", []), "corrections")
-                r["followups"] = int(r.get("followups", 0))
-            elif kind == "ok_explicit":
-                if r.get("outcome") in (None, "ok_implicit", "uncertain"):
-                    r["outcome"], r["labeled_by"], r["labeled_at"] = "ok", labeled_by, W.now_iso()
-            elif kind == "new_task":
-                r["followups"] = int(r.get("followups", 0)) - 1  # the new task itself is not a follow-up turn
-                if r.get("outcome") is None:
-                    r["outcome"], r["labeled_by"], r["labeled_at"] = "ok_implicit", labeled_by, W.now_iso()
-                fk = W.followup_heuristic(prompt)
-                if W.jev_available(cfg):
-                    ans = W.jev_ask({"NEW": prompt[:4000]}, W.Q_FOLLOWUP, cfg)
-                    f = W._answer(ans, "followup")
-                    if f and f.get("choice") and (f.get("confidence") or 0) >= cfg["jev"]["label_min_confidence"]:
-                        fk = f["choice"]
-                r["followup_kind"] = fk
-                r["closed"] = True
-            W.rewrite_log(recs)
+        # short lock timeout: a hook must never make the user wait on another session's write
+        with W.memory_lock(timeout_s=1.0):
+            recs = W.read_log()
+            idx = W.find_pending(recs, session=session)
+            if idx is not None:
+                r = recs[idx]
+                kind, cause = W.correction_heuristic(prompt)
+                labeled_by = "hook-heuristic"
+                if W.jev_available(cfg) and not W.is_ack(prompt, cfg["hook"]["skip_under_words"]):
+                    ans = W.jev_ask({"PREVIOUS": {"task_type": r.get("task_type"), "gate": r.get("gate")}, "NEW": prompt[:6000]}, W.Q_OUTCOME, cfg)
+                    k = W._answer(ans, "kind")
+                    if k and k.get("choice") and (k.get("confidence") or 0) >= cfg["jev"]["label_min_confidence"]:
+                        labeled_by = "hook-jev"
+                        kind = {"correction": "correction", "acknowledgement": "ok_explicit", "new_task": "new_task", "reply": "reply"}[k["choice"]]
+                        c = W._answer(ans, "cause")
+                        if kind == "correction" and c and c.get("choice") and c["choice"] != "none":
+                            cause = c["choice"]
+                elif W.is_ack(prompt, cfg["hook"]["skip_under_words"]):
+                    low = prompt.lower()
+                    kind = "ok_explicit" if any(w in low for w in ("thank", "perfect", "great", "nice", "lgtm", "looks good")) else "reply"
+                r["followups"] = int(r.get("followups", 0)) + 1
+                if kind == "reply":
+                    r["questions_asked"] = int(r.get("questions_asked", 0)) + 1
+                elif kind == "correction":
+                    if r.get("outcome") in (None, "ok_implicit", "uncertain"):
+                        r["outcome"], r["cause"], r["labeled_by"], r["labeled_at"] = "correction", cause, labeled_by, W.now_iso()
+                        W.bump_rules(r.get("rules", []), "corrections")
+                elif kind == "ok_explicit":
+                    if r.get("outcome") in (None, "ok_implicit", "uncertain"):
+                        r["outcome"], r["labeled_by"], r["labeled_at"] = "ok", labeled_by, W.now_iso()
+                elif kind == "new_task":
+                    r["followups"] = int(r.get("followups", 0)) - 1  # the new task itself is not a follow-up turn
+                    if r.get("outcome") is None:
+                        r["outcome"], r["labeled_by"], r["labeled_at"] = "ok_implicit", labeled_by, W.now_iso()
+                    fk = W.followup_heuristic(prompt)
+                    if W.jev_available(cfg):
+                        ans = W.jev_ask({"NEW": prompt[:4000]}, W.Q_FOLLOWUP, cfg)
+                        f = W._answer(ans, "followup")
+                        if f and f.get("choice") and (f.get("confidence") or 0) >= cfg["jev"]["label_min_confidence"]:
+                            fk = f["choice"]
+                    r["followup_kind"] = fk
+                    r["closed"] = True
+                W.rewrite_log(recs)
     except Exception:
         pass
 
@@ -99,12 +99,15 @@ def main() -> None:
 
     # 3. shortcuts: exact match expands the prompt
     try:
-        shortcuts = W.load_shortcuts()
-        key = W.match_shortcut(prompt, shortcuts)
+        key = None
+        with W.memory_lock(timeout_s=1.0):
+            shortcuts = W.load_shortcuts()
+            key = W.match_shortcut(prompt, shortcuts)
+            if key:
+                sc = shortcuts[key]
+                sc["uses"] = int(sc.get("uses", 0)) + 1
+                W.save_shortcuts(shortcuts)
         if key:
-            sc = shortcuts[key]
-            sc["uses"] = int(sc.get("uses", 0)) + 1
-            W.save_shortcuts(shortcuts)
             out["hookSpecificOutput"]["updatedPromptText"] = sc["expands_to"]
             out["hookSpecificOutput"]["additionalContext"] = "[Claude Whisperer] shortcut `%s` expanded. Act on the expanded prompt; the reply budget in it applies." % key
             print(json.dumps(out))

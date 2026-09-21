@@ -1,0 +1,181 @@
+{
+  "model": "heuristics",
+  "cases": {
+    "chatty-bugfix": {
+      "task_type": "bugfix",
+      "task_type_source": "heuristic",
+      "triage": "full",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 9,
+      "tokens": 57,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "terse-bugfix": {
+      "task_type": "other",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 14,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "credentials-in-prompt": {
+      "task_type": "ops",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [
+        "deploy",
+        "schema"
+      ],
+      "risk": true,
+      "secrets_detected": true,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 47,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "destructive-ops": {
+      "task_type": "refactor",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [
+        "deploy",
+        "schema"
+      ],
+      "risk": true,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 25,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "several-independent-tasks": {
+      "task_type": "feature",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": true,
+      "filler_total": 0,
+      "tokens": 38,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "also-explain-is-not-a-second-task": {
+      "task_type": "explain",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 39,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "pasted-code-block": {
+      "task_type": "bugfix",
+      "task_type_source": "heuristic",
+      "triage": "full",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 57,
+      "paths_missing": [],
+      "fenced_blocks": 1
+    },
+    "named-file-that-does-not-exist": {
+      "task_type": "other",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 26,
+      "paths_missing": [
+        "src/net/retry_policy.ts"
+      ],
+      "fenced_blocks": 0
+    },
+    "restates-claude-md": {
+      "task_type": "feature",
+      "task_type_source": "heuristic",
+      "triage": "full",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 40,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "acknowledgement": {
+      "task_type": "other",
+      "task_type_source": "heuristic",
+      "triage": "skip",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 3,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "question-not-a-task": {
+      "task_type": "explain",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 30,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    },
+    "review-with-scope-boundary": {
+      "task_type": "refactor",
+      "task_type_source": "heuristic",
+      "triage": "light",
+      "triage_source": "heuristic",
+      "risk_flags": [],
+      "risk": false,
+      "secrets_detected": false,
+      "multi_task_hint": false,
+      "filler_total": 0,
+      "tokens": 34,
+      "paths_missing": [],
+      "fenced_blocks": 0
+    }
+  }
+}

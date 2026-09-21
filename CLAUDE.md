@@ -21,7 +21,17 @@ python3 scripts/whisper.py stats | learnings | learn
 printf '<<<ORIGINAL>>>\n<prompt>\n' | python3 scripts/whisper.py analyze --cwd "$PWD"
 ```
 
-No build, no deps, no test suite. Every subcommand prints JSON on stdout.
+```bash
+cd tests && python3 -m unittest discover -p 'test_*.py'   # whole suite (~1s, no deps)
+cd tests && python3 -m unittest test_hooks -v             # one module
+cd tests && python3 -m unittest test_hooks.StopHook.test_reply_length_is_recorded_on_the_open_run
+cd tests && python3 run_cases.py                          # replay saved cases, diff vs snapshot
+cd tests && python3 run_cases.py --jev                    # same, through Jev (needs TYPESAFE_API_KEY)
+```
+
+No build, no deps. Every subcommand prints JSON on stdout. Tests set `WHISPERER_HOME` to a temp dir in
+`tests/_bootstrap.py`, which every test module imports **before** `whisper_lib`, so the real `memory/` is never
+touched; a test that imports `whisper_lib` first will write to the live store.
 
 Verify by running the CLI, not by reading it. A manual `analyze` writes `memory/pending/<id>.json` and appends to
 `memory/prompts.jsonl`; `log` appends to `memory/log.jsonl`. Delete those artifacts after a smoke test so the
@@ -34,6 +44,11 @@ learning log stays free of synthetic runs.
 - **Hooks never block.** `hooks/*.py` wrap everything in `try/except` and return silently on any failure. A hook
   that raises, prints garbage, or exits non-zero breaks the user's session.
 - **Memory is best-effort.** No script call may fail the task it is attached to.
+- **Every read-modify-write of a memory file goes inside `with W.memory_lock():`** (`whisper_lib.py`). Several
+  Claude Code sessions share one memory dir and both hooks fire per prompt, so an unserialised
+  read→mutate→write loses the other process' labels. The lock is re-entrant, times out rather than blocking
+  (1 s in hooks, 3 s in the CLI) and yields anyway on timeout. Writes go through `atomic_write()`, whose temp
+  file carries the pid — a shared temp name lets one process' `os.replace` pull the file out from under another.
 - **Privacy defaults.** `store_prompts` and `store_previews` are false in `memory/config.json`: the log holds
   content-word fingerprints, counts and classifications, not prompt text. `redact_secrets()` runs on anything
   that is stored when those switches are on.
@@ -79,7 +94,9 @@ section of `memory/learnings.md`. It never writes a rule. Claude promotes a cand
 Claude starts ignoring them, which defeats the purpose.
 
 `memory/learnings.md` is parsed by `RULE_RE`: `- [R001] (source, created, applied N, corrections M) rule text`,
-one rule per line. Hand edits are fine; breaking that line format silently drops the rule.
+one rule per line. Hand edits are fine; breaking that line format silently drops the rule. Rule text passes
+through `W.one_line()` wherever it enters (`rule add`, `rule promote`, `learn` candidates, and again on render),
+because a newline inside a rule truncates it at the next parse and the remainder is gone on the next save.
 
 ### Hooks (opt-in)
 
@@ -101,6 +118,15 @@ Every Jev decision has a paired heuristic fallback in the same file (`triage_heu
 `find_risks`, `correction_heuristic`, `followup_heuristic`). A slow (>`timeout_s`) or failed call is swallowed,
 counted in `memory/jev_status.json`, and the heuristic answers instead. Thresholds live in `memory/config.json`
 (`task_min_confidence`, `label_min_confidence`, `intent_drop_pause_at`), never hardcoded.
+
+### Saved cases
+
+`tests/cases/prompts.json` is the regression set for the analysis layer: real prompts, ugly ones included, each
+with a `why`, the deterministic `expect`ations, and `must_keep` strings the rewrite may never drop. Three cases
+carry a `known_gap`: the expectation pins what the heuristic *does* while the field records what it *should*
+say, so the set never quietly blesses a defect. `run_cases.py` replays them and diffs against
+`tests/cases_snapshot.json`, exiting 1 on drift — that is the check to run when the Jev model version moves,
+before a user sees new behavior.
 
 ## Conventions
 

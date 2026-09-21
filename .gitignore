@@ -13,3 +13,6 @@ __pycache__/
 # Backups written by `whisper.py hook on`
 *.bak
 *.whisperer.bak
+
+# pytest/unittest scratch
+.pytest_cache/
