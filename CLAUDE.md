@@ -154,7 +154,7 @@ Optimise when that p95 climbs, not on suspicion.
 `tests/cases/prompts.json` is the regression set for the analysis layer: real prompts, ugly ones included, each
 with a `why`, the deterministic `expect`ations, and `must_keep` strings the rewrite may never drop. A case may carry a
 `known_gap`: the expectation then pins what the heuristic *does* while the field records what it *should* say,
-so the set never quietly blesses a defect (none are open right now). `run_cases.py` replays them and diffs against
+so the set never quietly blesses a defect (one is open: `destructive-ops`). `run_cases.py` replays them and diffs against
 a baseline per path, exiting 1 on drift: `tests/cases_snapshot_heuristics.json` offline (also run by the unit
 suite), `tests/cases_snapshot_jev.json` with `--jev` — the check to run when the Jev model version moves, before a
 user sees new behavior. `--update` rewrites only the baseline of the path it ran.
