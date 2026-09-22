@@ -62,6 +62,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "task_min_confidence": 0.55,   # below this, fall back to the keyword heuristic
         "label_min_confidence": 0.6,   # below this, outcome stays "uncertain"
         "intent_drop_pause_at": 0.35,  # noul >= this -> pause for approval (asymmetric: dropping intent is costly)
+        # noul >= this -> several tasks. Not 0.5: measured over the saved cases, genuinely
+        # multi-task prompts answer >= 0.89 and single ones <= 0.50, so a cut at the mode
+        # turns "and also explain it" into a coin flip run to run. Sits in the gap.
+        "multi_task_at": 0.7,
     },
 }
 
@@ -912,7 +916,7 @@ def analyze_prompt(prompt: str, cwd: str, cfg: Dict[str, Any], use_jev: bool = T
                 a["risk"] = {"value": (r["noul"] >= 0.5) or bool(a["risks"]), "source": "jev+heuristic", "flags": a["risks"], "jev_p": round(r["noul"], 2)}
             m = _answer(answers, "multi_task")
             if m and m.get("noul") is not None:
-                a["multi_task_hint"] = m["noul"] >= 0.5
+                a["multi_task_hint"] = m["noul"] >= cfg["jev"]["multi_task_at"]
                 a["multi_task_p"] = round(m["noul"], 2)
 
     a["rules"] = relevant_rules(load_rules(), a)
