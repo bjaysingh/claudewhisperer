@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    # Pinned, not ubuntu-latest: Python 3.9 has no ubuntu-26.04 build, so the floor job would
+    # break when the -latest label moves.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor the hook promises (stdlib only, Python 3.9+); 3.x is the newest release.
+        python-version: ["3.9", "3.x"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      # No TYPESAFE_API_KEY here: the suite is offline by design, and it includes the offline case replay.
+      - name: Unit suite
+        working-directory: tests
+        run: python -m unittest discover -p 'test_*.py' -v

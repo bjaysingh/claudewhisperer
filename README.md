@@ -151,7 +151,8 @@ cd tests && python3 run_cases.py                          # replay the saved pro
 `run_cases.py` diffs a replay against `tests/cases_snapshot_heuristics.json` (with `--jev`, against
 `tests/cases_snapshot_jev.json`) and exits 1 on drift; run it with `--jev`
 after changing the Jev model or any threshold in `memory/config.json`, because those are tuned against
-whatever model answered last. Tests write to a temp `WHISPERER_HOME`, never your real `memory/`.
+whatever model answered last. Tests write to a temp `WHISPERER_HOME`, never your real `memory/`. CI
+(`.github/workflows/tests.yml`) runs the suite on Python 3.9 and the newest 3.x on every push and pull request.
 
 ## Design notes
 

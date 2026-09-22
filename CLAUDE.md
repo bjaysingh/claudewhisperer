@@ -29,6 +29,10 @@ cd tests && python3 run_cases.py                          # replay saved cases, 
 cd tests && python3 run_cases.py --jev                    # same, through Jev (needs TYPESAFE_API_KEY)
 ```
 
+CI (`.github/workflows/tests.yml`) runs the whole suite on Python 3.9 and 3.x, on `ubuntu-24.04` pinned because
+3.9 has no ubuntu-26.04 build. It runs offline: no `TYPESAFE_API_KEY`, so `test_jev` covers the client through stubbed
+`urlopen` and live Jev answers are checked only by `run_cases.py --jev`.
+
 No build, no deps. Every subcommand prints JSON on stdout. Tests set `WHISPERER_HOME` to a temp dir in
 `tests/_bootstrap.py`, which every test module imports **before** `whisper_lib`, so the real `memory/` is never
 touched; a test that imports `whisper_lib` first will write to the live store.
