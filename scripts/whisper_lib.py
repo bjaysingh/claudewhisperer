@@ -4,6 +4,7 @@ Stdlib only. Python 3.9+ (macOS system python works).
 Everything here is deterministic except the optional Jev calls, which
 degrade to heuristics when TYPESAFE_API_KEY is absent or the call fails.
 """
+import bisect
 import contextlib
 import hashlib
 import json
@@ -328,23 +329,53 @@ OUTPUT_REQUEST_TAIL = re.compile(
 # Risk flags that mean the work is operational whatever verb the user reached for
 OPS_RISK_FLAGS = {"schema", "deploy", "delete"}
 
-# Several tasks, told apart by shape: a work verb, a sequence marker, another work verb ("drop the table,
-# then redeploy"). Base forms only, so a narrated symptom ("resets, then fires twice") is not a task. Checks
-# and routine tails ("then run the suite", "then commit") belong to the task before them and are left out
-# on purpose, as are the methods of one fix (reproduce, investigate).
-WORK_VERB = (r"(?:add|archive|backfill|build|bump|clean|close|configure|convert|create|delete|deploy|deprecate|"
-             r"disable|document|drop|enable|extract|fix|implement|install|merge|migrate|move|open|patch|port|"
-             r"provision|prune|publish|purge|rebase|rebuild|redeploy|refactor|regenerate|reindex|release|remove|"
-             r"rename|replace|reset|restart|restore|revert|rewrite|rotate|seed|set ?up|split|tag|truncate|"
-             r"uninstall|update|upgrade|vacuum|wire|write)")
-WORK_VERB_RE = re.compile(r"\b" + WORK_VERB + r"\b")
-SEQUENCE_RE = re.compile(r"\b(?:then|after that|afterwards),?\s+(?:also\s+)?(?:please\s+)?" + WORK_VERB + r"\b")
-# "if the health check fails, then roll back" is one instruction with a contingency, not two tasks
-CONDITIONAL_RE = re.compile(r"\b(?:if|when|whenever|once|unless)\b[^.;!?\n]*$")
-# The older markers open plenty of one-task prompts ("also fix the typo"), so they only count in a prompt
-# long enough to hold two.
-MULTI_TASK_LONG_RE = re.compile(r"\b(and then|after that|additionally|secondly|finally|as well as|"
-                                r"also (?!(please )?(explain|summari[sz]e|tell|show|describe|walk|let me know)))\b")
+# Several tasks, told apart by shape: two or more task clauses, each a work verb where a command starts -
+# the start, after punctuation, "and" or "then", after a sequence word ("once that's done", "also can you"),
+# after a hand-off ("someone still needs to"), or as a list item. Base forms only, so a narrated symptom
+# ("resets, then fires twice") is not a task. Checks and routine tails ("then run the suite", "then commit",
+# "and open a PR") are not work verbs: they belong to the task before them, as do the methods of one fix.
+WORK_VERB = (r"(?:add|adjust|archive|backfill|backport|build|bump|cache|change|clean|configure|convert|create|"
+             r"decrease|delete|deploy|deprecate|disable|document|downgrade|draft|drop|email|enable|extract|fix|"
+             r"harden|implement|improve|increase|install|introduce|lower|merge|message|migrate|move|notify|"
+             r"optimi[sz]e|patch|pin|ping|port|post|profile|provision|prune|publish|purge|raise|rebase|rebuild|"
+             r"redeploy|refactor|regenerate|reindex|release|remove|rename|reorgani[sz]e|replace|reset|restart|"
+             r"restore|restructure|revert|rewrite|rotate|scaffold|seed|set ?up|ship|simplify|split|squash|swap|tag|"
+             r"tighten|translate|truncate|uninstall|unpin|update|upgrade|vacuum|wire|write|investigate|"
+             r"(?:take a )?look (?:into|at)|(?:figure|find) out (?:why|what|how|where)|check why)")
+# Words that can open a task clause before its verb. Matched one at a time, never as a repeated group:
+# a repeated group backtracks on a run of them with no verb (114 ms on 10k characters, a hook stall).
+CLAUSE_LEAD_RE = re.compile(r"\s*(?:and|then|also|additionally|secondly|oh|btw|please|pls|plz|now|just|first|"
+                            r"second|third|next|finally|lastly|afterwards|after that|"
+                            r"once (?:that'?s|that is|it'?s|this is) done|"
+                            r"when (?:that'?s|that is|it'?s|you'?re) done(?: with (?:that|it))?|"
+                            r"while you'?re (?:at it|there)|(?:can|could|would) (?:you|u)|go ahead and|"
+                            r"i (?:need|want) you to|"
+                            r"(?:we|you|someone|somebody|i)(?: still| also)? (?:should|must|gotta|needs? to|ha(?:ve|s) to))"
+                            r",?(?=\s)")
+# punctuation opens a clause only when a space follows it: "users.email" and "v2.3" are not two sentences
+CLAUSE_START_RE = re.compile(r"^|[.;:!?,](?=\s)|\n|\band\b|\bthen\b|\b\d+[.)](?=\s)|(?<![\w-])[-*•](?=\s)")
+CLAUSE_VERB_RE = re.compile(r"\s*(?P<verb>" + WORK_VERB + r")\b(?=(?P<rest>(?:\s+[^\s.;:!?,]+){0,4}))")
+# A pasted log line is not a request, any more than a fenced block is. Matched on the original case: a
+# level is ERROR or [error], never the word a prompt opens with ("debug why the pairing drops").
+LOG_LINE_RE = re.compile(r"^[ \t]*(?:\[?\d{4}-\d\d-\d\d[ T]\d|(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL)\b|"
+                         r"\[(?i:trace|debug|info|warn|warning|error|fatal|critical)\]|[ \t]+at \S|"
+                         r"File \"[^\"]+\", line \d|Traceback \().*$", re.M)
+SENTENCE_END_RE = re.compile(r"[.;!?](?=\s)|\n")
+# A later clause about the same change is the same task: "and update its call sites", "then fix whatever
+# breaks", "and fix the resulting type errors", "and fix the imports", "and add a regression test".
+# Shipping or telling someone is not, even about "it": "and deploy it".
+BACK_REFERENCE_RE = re.compile(r"\b(?:it|its|them|their|the same)\b")
+FALLOUT_RE = re.compile(r"\b(?:(?:what|whatever) (?:breaks|broke|fails|failed)|(?:any|the) (?:breakage|fallout)|"
+                        r"any breaking changes?|resulting)\b")
+FOLLOW_THROUGH_RE = re.compile(r"\b(?:imports|call ?sites|callers|references|usages|tests?|specs?|coverage)\b")
+FOLLOW_THROUGH_VERB_RE = re.compile(r"(?:fix|update|adjust|add|write|extend)$")
+OPS_VERB_RE = re.compile(r"(?:deploy|redeploy|release|publish|ship|tag|restart|notify|post|email|ping|message)$")
+# "if the health check fails, roll back" is one instruction with a contingency, not two tasks. Only a
+# segment that opens with the condition counts: "fix the crash when the cache is empty" is a bug report.
+CONDITIONAL_RE = re.compile(r"\s*(?:(?:and|but|so)\s+)?(?:if|whenever|unless|"
+                            r"when(?!\s+(?:that'?s|that is|it'?s|you'?re)\s+done)|"
+                            r"once(?!\s+(?:that'?s|that is|it'?s|this is)\s+done))\b")
+LIST_ITEM_RE = re.compile(r"(?:^|\s)(?:\d+[.)]|[-*•])\s")
 
 TASK_ORDER = ["bugfix", "test", "refactor", "review", "explain", "research", "docs", "ops", "feature"]
 
@@ -363,13 +394,52 @@ def _score_tasks(low: str) -> Dict[str, int]:
     return scores
 
 
+def _clause_verbs(low: str):
+    """(clause start, verb match) for every task clause. Linear: a lead run is scanned once, however many
+    clause starts ("and", ",") sit inside it."""
+    scanned_to = 0
+    for b in CLAUSE_START_RE.finditer(low):
+        if b.start() < scanned_to:
+            continue
+        pos = b.end()
+        lead = CLAUSE_LEAD_RE.match(low, pos)
+        while lead:
+            pos = lead.end()
+            lead = CLAUSE_LEAD_RE.match(low, pos)
+        scanned_to = pos
+        v = CLAUSE_VERB_RE.match(low, pos)
+        if v:
+            yield b.start(), v
+
+
+def _task_clauses(text: str) -> List[str]:
+    low = LOG_LINE_RE.sub(" ", FENCE_RE.sub(" ", text)).lower()   # pasted diffs and logs are not requests
+    items = list(LIST_ITEM_RE.finditer(low))
+    steps_from = None
+    if len(items) >= 2:
+        lead = low[:items[0].start()].rstrip()
+        if lead.endswith(":") and any(_clause_verbs(lead)):
+            steps_from = items[0].start()     # "fix the flaky test: 1) pin the clock 2) ..." lists one task's steps
+    stops = [e.start() for e in SENTENCE_END_RE.finditer(low)]
+    verbs: List[str] = []
+    for start, m in _clause_verbs(low):
+        if steps_from is not None and m.start("verb") > steps_from:
+            continue
+        i = bisect.bisect_right(stops, start)   # a clause opened by "." starts a new sentence
+        before = low[stops[i - 1] + 1 if i else 0:start]
+        if any(CONDITIONAL_RE.match(seg) for seg in before.split(",")):
+            continue
+        verb, rest = m.group("verb"), m.group("rest")
+        if verbs and (FALLOUT_RE.search(rest)
+                      or (BACK_REFERENCE_RE.search(rest) and not OPS_VERB_RE.match(verb))
+                      or (FOLLOW_THROUGH_RE.search(rest) and FOLLOW_THROUGH_VERB_RE.match(verb))):
+            continue
+        verbs.append(verb)
+    return verbs
+
+
 def multi_task_heuristic(text: str) -> bool:
-    low = text.lower()
-    for m in SEQUENCE_RE.finditer(low):
-        before = low[:m.start()]
-        if WORK_VERB_RE.search(before) and not CONDITIONAL_RE.search(before):
-            return True
-    return bool(MULTI_TASK_LONG_RE.search(low)) and len(text.split()) > 25
+    return len(_task_clauses(text)) >= 2
 
 
 def task_type_heuristic(text: str, risk_flags: Optional[List[str]] = None) -> Tuple[str, Dict[str, int]]:

@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import _bootstrap  # noqa: F401
@@ -121,29 +122,66 @@ class SavedCases(unittest.TestCase):
 
 
 class MultiTaskHeuristic(unittest.TestCase):
-    """Several tasks are told apart by shape: a work verb, a sequence marker, another work verb. Each row pins
-    one side of one rule, so loosening any of them fails a named prompt rather than a count."""
+    """Several tasks are told apart by shape: two or more task clauses, each a work verb where a command
+    starts. Each row pins one side of one rule, so loosening any of them fails a named prompt, not a count."""
 
     SEVERAL = [
         "fix the flaky retry test in test_net.py; after that, add a request timeout to the http client",
         "add a --dry-run flag to the sync command. then add a --verbose flag to export.",
         "tag the release then publish it to pypi",
         "update the README install section and then regenerate the API reference",
+        # joined only by "and", only by commas, by a sequence phrase, by "also can you"
+        "fix the null pointer in auth.py and update the readme with the new setup steps",
+        "clean up the unused imports in utils.js, bump the lodash version, rotate the staging api key",
+        "migrate the orders table to add a refunded_at column, once that's done update the api docs for the refunds "
+        "endpoint",
+        "bump node to 20 in the dockerfile, also can you check why eslint is failing on ci",
+        # a list with no task in front of it is a list of tasks
+        "1. fix the flaky test in checkout.spec.ts 2. update ci to cache node_modules 3. write a changelog entry",
+        # shipping is its own task even when it points back at the change
+        "patch the xss hole in the comment form and deploy it straight to production",
+        # "when" inside a bug report is not a condition, and a condition ends with its sentence
+        "fix the crash when the cache is empty, then bump the version to 1.4.2",
+        "if it fails we stop. fix the parser and rotate the staging api key",
+        # "the import cycle" is its own bug, and cleaning up imports is its own job
+        "rename the Config class to Settings everywhere, and after that fix the import cycle in cli.py",
+        "document the new webhook endpoint and clean up the unused imports in utils.py",
+        # a hand-off still names a task, and telling someone is one
+        "refactor the cart reducer, and someone still needs to update the rate limit docs",
+        "migrate the orders table, also ping the data team about the new column",
+        # a prompt that opens with a log-level word is still a prompt
+        "warning: the export is slow. fix the n+1 query in export.py and bump the orm to 4.2",
     ]
     ONE = [
         # the verb after the marker narrates a symptom or specifies behaviour; it is not an imperative
         "fix the bug where the session timer resets, then fires twice",
-        "write a migration that adds a nullable column, then backfills it in batches",
+        "write a migration that adds a nullable column, then backfills the rows in batches",
         # a contingency, not a second task
         "if the deploy fails after you update the config, then restore the previous build",
+        "run the migration on staging, and if it fails restore the snapshot and notify me",
+        "deploy the hotfix to prod, and if the smoke tests fail revert it and notify the team",
         # routine and check tails belong to the task before them
         "add the retry flag to the sync command, then commit",
         "fix the flaky upload test, then run the whole suite to make sure nothing else broke",
+        "write the release notes and then open a PR",
+        # a later clause about the same change is the same task
+        "rename the getUserData helper and update its call sites",
+        "move the date helpers into utils/ and fix the imports",
+        "fix the timezone bug in the scheduler and add a regression test",
+        "upgrade react to 19, then fix whatever breaks in the test suite",
+        "upgrade the sdk to v5 and fix the resulting type errors",
+        # a dot inside an identifier does not end a sentence
+        "add a unique constraint on users.email in the accounts table",
+        # a list after a task is that task's steps; pasted material is not a request
+        "fix the flaky checkout test: 1. pin the clock 2. remove the sleep 3. add a retry",
+        "why does this fail?\n```\n- add retries\n- update the cache\n```",
+        "the worker keeps dying:\n2026-09-22 10:01:02 ERROR retry, update pending, add job\n"
+        "2026-09-22 10:01:03 ERROR retry, update pending, add job\nwhy?",
+        "why does the job fail?\nERROR worker-3 update pending, add job\nERROR worker-3 update pending, add job",
         # a follow-up that opens with the marker has no first task
         "then redeploy the api",
         "I ran the migration and then it crashed with a lock timeout, find out why",
         "explain how the scheduler picks the next job and then how retries get queued",
-        # the older markers still need a prompt long enough to hold two tasks
         "also fix the typo in the footer",
     ]
 
@@ -156,6 +194,14 @@ class MultiTaskHeuristic(unittest.TestCase):
         for p in self.ONE:
             with self.subTest(prompt=p):
                 self.assertFalse(W.multi_task_heuristic(p))
+
+    def test_a_run_of_lead_words_costs_linear_time(self):
+        """The hook runs this on every prompt. As one regex with a repeated lead group it backtracked:
+        114 ms on 10k characters of "and then can you" with no verb. Quadratic would take seconds here."""
+        text = "also then and please can you just now " * 1000
+        t0 = time.perf_counter()
+        self.assertFalse(W.multi_task_heuristic(text))
+        self.assertLess(time.perf_counter() - t0, 0.5)
 
     def test_several_tasks_are_full_triage_however_short(self):
         """Q_ANALYZE puts several tasks mixed together under `full`; before this a short chain read as tight."""
