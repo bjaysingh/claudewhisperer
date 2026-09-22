@@ -774,7 +774,11 @@ def jev_ask(state: Any, questions: Dict[str, Dict[str, Any]], cfg: Dict[str, Any
 Q_ANALYZE: Dict[str, Dict[str, Any]] = {
     "triage": {
         "type": "choice",
-        "instructions": "How much rewriting does this message to a coding agent need before the agent acts on it?",
+        # "asks for nothing" carries the weight: without it Jev reads any question as skip, and an
+        # explain request loses the reply budget that is the whole point of triaging it.
+        "instructions": "How much rewriting does this message to a coding agent need before the agent "
+                        "acts on it? Anything that asks the agent to produce work or an answer needs at "
+                        "least a bounded reply format; only a message that asks for nothing is skip.",
         "criteria": {
             "skip": "A short reply, acknowledgement, answer to the agent's question, or a one-line command that is already precise. Rewriting would add nothing.",
             "light": "A clear task that only needs filler trimmed or a bounded reply format added.",

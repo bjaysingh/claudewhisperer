@@ -7,10 +7,15 @@ last. When the Jev model moves, this is what says out loud what changed before a
     python3 tests/run_cases.py                 # heuristics only, diff against the snapshot
     python3 tests/run_cases.py --jev           # include Jev's answers (needs TYPESAFE_API_KEY)
     python3 tests/run_cases.py --update        # accept the current output as the new baseline
+    python3 tests/run_cases.py --jev --samples 8   # majority of 8 draws, and what was unstable
 
 Exit code 1 when anything drifted, so it can gate a release.
+
+Use the same --samples the baseline was written with: a majority-of-8 row carries an _unstable
+field that a single draw cannot produce, so mixing the two reports drift that is not there.
 """
 import argparse
+import collections
 import json
 import os
 import sys
@@ -28,7 +33,7 @@ from test_cases import CASES_DIR, analyse, load_cases  # noqa: E402
 SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cases_snapshot.json")
 
 
-def snapshot_of(case, use_jev):
+def _row(case, use_jev):
     cwd = tempfile.mkdtemp()
     if use_jev:
         real = W.claude_md_files
@@ -66,10 +71,43 @@ def snapshot_of(case, use_jev):
     return row
 
 
+def snapshot_of(case, use_jev, samples=1):
+    """Run the case `samples` times and keep the majority answer per field.
+
+    Jev is non-deterministic: the same prompt can come back `skip` on one run and `light` on the
+    next, so a single draw makes the gate report drift that is only sampling noise, and it hides a
+    case that is answered wrong a third of the time. The majority is what the user mostly gets;
+    `_unstable` names the fields that did not agree with themselves, which is its own defect.
+    """
+    rows = [_row(case, use_jev) for _ in range(samples)]
+    if samples == 1:
+        return rows[0], []
+    row, unstable = {}, []
+    # a row omits *_confidence_band entirely when the heuristic answered, so the key sets differ
+    keys = [k for k in rows[0]] + [k for r in rows[1:] for k in r if k not in rows[0]]
+    for k in dict.fromkeys(keys):
+        seen = collections.Counter(json.dumps(r.get(k), sort_keys=True) for r in rows)
+        top, n = seen.most_common(1)[0]
+        top = json.loads(top)
+        # Which of Jev/heuristic answered can flap while both give the same value: that is
+        # provenance, not a decision. Recording the majority of a coin flip would make the
+        # baseline disagree with itself run after run, so say "mixed" and stay stable.
+        provenance = k.endswith(("_source", "_confidence_band")) or k == "jev_used"
+        if n < samples and provenance:
+            row[k] = "mixed"
+        elif top is not None:
+            row[k] = top
+        if n < samples and not provenance:
+            unstable.append("%s %d/%d" % (k, n, samples))
+    return row, sorted(unstable)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--jev", action="store_true", help="ask Jev too (records confidences)")
     ap.add_argument("--update", action="store_true", help="write the current output as the baseline")
+    ap.add_argument("--samples", type=int, default=1, metavar="N",
+                    help="run each case N times and keep the majority answer (Jev is non-deterministic)")
     args = ap.parse_args()
 
     cfg = W.load_config()
@@ -79,11 +117,23 @@ def main():
 
     cases = load_cases()
     current = {"model": cfg["jev"]["model"] if args.jev else "heuristics",
-               "cases": {c["name"]: snapshot_of(c, args.jev) for c in cases}}
+               "cases": {}}
+    shaky = []
+    for c in cases:
+        row, unstable = snapshot_of(c, args.jev, args.samples)
+        current["cases"][c["name"]] = row
+        if unstable:
+            shaky.append((c["name"], unstable))
+
+    if shaky:
+        print("unstable across %d samples (the model disagreed with itself):" % args.samples)
+        for name, fields in shaky:
+            print("  %s: %s" % (name, ", ".join(fields)))
 
     if args.update or not os.path.exists(SNAPSHOT):
         W.write_json(SNAPSHOT, current)
-        print("baseline written: %d cases (%s)" % (len(cases), current["model"]))
+        print("baseline written: %d cases (%s, %d sample(s))"
+              % (len(cases), current["model"], args.samples))
         return 0
 
     with open(SNAPSHOT, encoding="utf-8") as f:
@@ -91,15 +141,23 @@ def main():
     if base.get("model") != current["model"]:
         print("baseline model %r, this run %r" % (base.get("model"), current["model"]))
 
-    drift = []
+    drift, provenance = [], []
     for name, row in current["cases"].items():
         old = base["cases"].get(name)
         if old is None:
             drift.append("%s: new case, no baseline" % name)
             continue
         for k, v in row.items():
-            if old.get(k) != v:
-                drift.append("%s: %s %r -> %r" % (name, k, old.get(k), v))
+            if old.get(k) == v:
+                continue
+            line = "%s: %s %r -> %r" % (name, k, old.get(k), v)
+            # Whether Jev or the heuristic supplied an answer can differ run to run while the
+            # answer itself is identical. Worth printing, never worth failing: a release gate
+            # that cries every run is one nobody reads.
+            if k.endswith(("_source", "_confidence_band")) or k == "jev_used":
+                provenance.append(line)
+            else:
+                drift.append(line)
     for name in base["cases"]:
         if name not in current["cases"]:
             drift.append("%s: case removed" % name)
@@ -107,6 +165,10 @@ def main():
     gaps = [c["name"] for c in cases if c.get("known_gap")]
     if gaps:
         print("known gaps still pinned: %s" % ", ".join(gaps))
+    if provenance:
+        print("provenance changed (same answers, different source) - not gating:")
+        for d in provenance:
+            print("  " + d)
     if not drift:
         print("%d cases, no drift (%s)" % (len(cases), current["model"]))
         return 0

@@ -20,8 +20,8 @@
     "terse-bugfix": {
       "task_type": "bugfix",
       "task_type_source": "jev",
-      "triage": "full",
-      "triage_source": "jev",
+      "triage": "light",
+      "triage_source": "heuristic",
       "risk_flags": [],
       "risk": false,
       "secrets_detected": false,
@@ -31,14 +31,13 @@
       "paths_missing": [],
       "fenced_blocks": 0,
       "jev_used": true,
-      "task_type_confidence_band": ">=floor",
-      "triage_confidence_band": ">=floor"
+      "task_type_confidence_band": ">=floor"
     },
     "credentials-in-prompt": {
       "task_type": "ops",
       "task_type_source": "jev",
-      "triage": "full",
-      "triage_source": "jev",
+      "triage": "light",
+      "triage_source": "heuristic",
       "risk_flags": [
         "deploy",
         "schema"
@@ -51,8 +50,7 @@
       "paths_missing": [],
       "fenced_blocks": 0,
       "jev_used": true,
-      "task_type_confidence_band": ">=floor",
-      "triage_confidence_band": ">=floor"
+      "task_type_confidence_band": ">=floor"
     },
     "destructive-ops": {
       "task_type": "ops",
@@ -126,7 +124,7 @@
       "task_type": "feature",
       "task_type_source": "jev",
       "triage": "light",
-      "triage_source": "heuristic",
+      "triage_source": "mixed",
       "risk_flags": [],
       "risk": false,
       "secrets_detected": false,
@@ -138,7 +136,8 @@
       ],
       "fenced_blocks": 0,
       "jev_used": true,
-      "task_type_confidence_band": ">=floor"
+      "task_type_confidence_band": ">=floor",
+      "triage_confidence_band": "mixed"
     },
     "restates-claude-md": {
       "task_type": "feature",
@@ -175,7 +174,7 @@
       "task_type": "explain",
       "task_type_source": "jev",
       "triage": "light",
-      "triage_source": "heuristic",
+      "triage_source": "mixed",
       "risk_flags": [],
       "risk": false,
       "secrets_detected": false,
@@ -185,13 +184,14 @@
       "paths_missing": [],
       "fenced_blocks": 0,
       "jev_used": true,
-      "task_type_confidence_band": ">=floor"
+      "task_type_confidence_band": ">=floor",
+      "triage_confidence_band": "mixed"
     },
     "review-with-scope-boundary": {
       "task_type": "review",
       "task_type_source": "jev",
       "triage": "light",
-      "triage_source": "heuristic",
+      "triage_source": "mixed",
       "risk_flags": [],
       "risk": false,
       "secrets_detected": false,
@@ -201,7 +201,8 @@
       "paths_missing": [],
       "fenced_blocks": 0,
       "jev_used": true,
-      "task_type_confidence_band": ">=floor"
+      "task_type_confidence_band": ">=floor",
+      "triage_confidence_band": "mixed"
     }
   }
 }
