@@ -4,9 +4,9 @@
 Why it exists: the thresholds in memory/config.json are tuned against whatever model answered
 last. When the Jev model moves, this is what says out loud what changed before a user sees it.
 
-    python3 tests/run_cases.py                 # heuristics only, diff against the snapshot
-    python3 tests/run_cases.py --jev           # include Jev's answers (needs TYPESAFE_API_KEY)
-    python3 tests/run_cases.py --update        # accept the current output as the new baseline
+    python3 tests/run_cases.py                 # heuristics only, diff against cases_snapshot_heuristics.json
+    python3 tests/run_cases.py --jev           # include Jev's answers, diff against cases_snapshot_jev.json
+    python3 tests/run_cases.py --update        # accept the current output as that path's new baseline
     python3 tests/run_cases.py --jev --samples 8   # majority of 8 draws, and what was unstable
 
 Exit code 1 when anything drifted, so it can gate a release.
@@ -29,8 +29,12 @@ if _bootstrap._STASHED_JEV_KEY:
 import whisper_lib as W  # noqa: E402
 from test_cases import CASES_DIR, analyse, load_cases  # noqa: E402
 
-# deliberately NOT inside cases/: load_cases() globs every .json in there
-SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cases_snapshot.json")
+# deliberately NOT inside cases/: load_cases() globs every .json in there.
+# One baseline per path: a heuristics replay diffed against the Jev baseline reports every place the two
+# disagree as drift, and its --update would overwrite the baseline the model-version check needs.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SNAPSHOTS = {False: os.path.join(_HERE, "cases_snapshot_heuristics.json"),
+             True: os.path.join(_HERE, "cases_snapshot_jev.json")}
 
 
 def _row(case, use_jev):
@@ -130,13 +134,14 @@ def main():
         for name, fields in shaky:
             print("  %s: %s" % (name, ", ".join(fields)))
 
-    if args.update or not os.path.exists(SNAPSHOT):
-        W.write_json(SNAPSHOT, current)
+    snapshot = SNAPSHOTS[args.jev]
+    if args.update or not os.path.exists(snapshot):
+        W.write_json(snapshot, current)
         print("baseline written: %d cases (%s, %d sample(s))"
               % (len(cases), current["model"], args.samples))
         return 0
 
-    with open(SNAPSHOT, encoding="utf-8") as f:
+    with open(snapshot, encoding="utf-8") as f:
         base = json.load(f)
     if base.get("model") != current["model"]:
         print("baseline model %r, this run %r" % (base.get("model"), current["model"]))

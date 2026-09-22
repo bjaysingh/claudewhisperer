@@ -47,6 +47,7 @@ def cmd_analyze(args) -> None:
     a["hash"] = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
     if cfg.get("store_prompts"):
         a["original"] = W.redact_secrets(prompt)
+    W.reap_pending()
     W.write_json(os.path.join(W.PENDING_DIR, a["id"] + ".json"), a)
     # trim noise for the model: keep what changes the rewrite
     view = {k: a[k] for k in ("id", "project", "tokens", "words", "filler", "risk", "task_type", "triage", "secrets_detected",
@@ -473,8 +474,10 @@ def cmd_stats(args) -> None:
     dry = [r for r in all_recs if r.get("dry")]
     n = len(recs)
     whispered = [r for r in recs if W.is_whispered(r)]
+    # nudged or analysed, never whispered: in neither arm. Pending files carry no session, so no per-session count.
+    never_logged = None if args.session else W.never_logged_count()
     if n == 0 and not dry:
-        out({"runs": 0, "message": "no runs yet"})
+        out({"runs": 0, "message": "no runs yet", "analyses_never_logged": never_logged})
         return
     outcomes = Counter(r.get("outcome") or "pending" for r in whispered)
     causes = Counter(r.get("cause") for r in whispered if r.get("outcome") == "correction")
@@ -505,6 +508,7 @@ def cmd_stats(args) -> None:
         "runs": n,
         "whispered_runs": sum(1 for r in recs if W.is_whispered(r)),
         "baseline_runs": sum(1 for r in recs if not W.is_whispered(r)),
+        "analyses_never_logged": never_logged,
         "does_it_help": _effect(recs),
         "trend": _trend(recs),
         "dry_or_audit_runs": len(dry),

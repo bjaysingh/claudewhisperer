@@ -25,7 +25,7 @@ printf '<<<ORIGINAL>>>\n<prompt>\n' | python3 scripts/whisper.py analyze --cwd "
 cd tests && python3 -m unittest discover -p 'test_*.py'   # whole suite (~1s, no deps)
 cd tests && python3 -m unittest test_hooks -v             # one module
 cd tests && python3 -m unittest test_hooks.StopHook.test_reply_length_is_recorded_on_the_open_run
-cd tests && python3 run_cases.py                          # replay saved cases, diff vs snapshot
+cd tests && python3 run_cases.py                          # replay saved cases, diff vs heuristics snapshot
 cd tests && python3 run_cases.py --jev                    # same, through Jev (needs TYPESAFE_API_KEY)
 ```
 
@@ -71,7 +71,9 @@ Two layers with a firm split:
 `analyze` (prompt on stdin, framed by `<<<ORIGINAL>>>`) writes the full analysis to `memory/pending/<id>.json`
 and returns a trimmed `view` to the model → Claude composes the rewrite → `log --analysis <id>` (both prompts on
 stdin, `<<<ORIGINAL>>>` / `<<<REWRITTEN>>>`) merges the pending analysis, appends one record to
-`memory/log.jsonl`, deletes the pending file, and returns the final gate.
+`memory/log.jsonl`, deletes the pending file, and returns the final gate. Nothing else consumes a pending file,
+so the next `analyze` or hook nudge reaps any older than `PENDING_TTL_S` (6 h) and counts it; `stats` reports the
+total as `analyses_never_logged`: prompts nudged and never whispered, which sit in neither arm of the comparison.
 
 The gate is decided by Claude, then can only be tightened: with Jev configured, `_gate_with_jev()` reads the two
 prompts independently and flips `proceed` to `pause` at `intent_drop >= intent_drop_pause_at`. That independence
@@ -153,8 +155,9 @@ Optimise when that p95 climbs, not on suspicion.
 with a `why`, the deterministic `expect`ations, and `must_keep` strings the rewrite may never drop. A case may carry a
 `known_gap`: the expectation then pins what the heuristic *does* while the field records what it *should* say,
 so the set never quietly blesses a defect (none are open right now). `run_cases.py` replays them and diffs against
-`tests/cases_snapshot.json`, exiting 1 on drift — that is the check to run when the Jev model version moves,
-before a user sees new behavior.
+a baseline per path, exiting 1 on drift: `tests/cases_snapshot_heuristics.json` offline (also run by the unit
+suite), `tests/cases_snapshot_jev.json` with `--jev` — the check to run when the Jev model version moves, before a
+user sees new behavior. `--update` rewrites only the baseline of the path it ran.
 
 ## Conventions
 

@@ -148,7 +148,8 @@ cd tests && python3 run_cases.py                          # replay the saved pro
 ```
 
 `tests/cases/prompts.json` holds the saved prompts the analysis layer is tuned against, ugly ones included.
-`run_cases.py` diffs a replay against `tests/cases_snapshot.json` and exits 1 on drift; run it with `--jev`
+`run_cases.py` diffs a replay against `tests/cases_snapshot_heuristics.json` (with `--jev`, against
+`tests/cases_snapshot_jev.json`) and exits 1 on drift; run it with `--jev`
 after changing the Jev model or any threshold in `memory/config.json`, because those are tuned against
 whatever model answered last. Tests write to a temp `WHISPERER_HOME`, never your real `memory/`.
 

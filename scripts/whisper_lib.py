@@ -31,6 +31,8 @@ LEARNINGS_PATH = os.path.join(MEMORY_DIR, "learnings.md")
 CONFIG_PATH = os.path.join(MEMORY_DIR, "config.json")
 PENDING_DIR = os.path.join(MEMORY_DIR, "pending")
 JEV_STATUS_PATH = os.path.join(MEMORY_DIR, "jev_status.json")
+PENDING_REAPED_PATH = os.path.join(MEMORY_DIR, "pending_reaped.json")
+PENDING_TTL_S = 6 * 3600   # an analysis no `log` consumed in this long never will be
 SHORTCUTS_PATH = os.path.join(MEMORY_DIR, "shortcuts.json")
 PROMPTS_PATH = os.path.join(MEMORY_DIR, "prompts.jsonl")
 LOCK_PATH = os.path.join(MEMORY_DIR, ".lock")
@@ -1111,9 +1113,66 @@ def find_pending(records: List[Dict[str, Any]], session: Optional[str] = None, m
     return None
 
 
+def _stale_pending() -> List[str]:
+    now = time.time()
+    out = []
+    try:
+        with os.scandir(PENDING_DIR) as it:
+            for e in it:
+                try:
+                    if e.name.endswith(".json") and now - e.stat().st_mtime > PENDING_TTL_S:
+                        out.append(e.path)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def _reaped_so_far() -> int:
+    try:
+        with open(PENDING_REAPED_PATH, encoding="utf-8") as f:
+            return int(json.load(f).get("reaped", 0))
+    except Exception:
+        return 0
+
+
+def reap_pending(lock_timeout_s: float = 3.0) -> int:
+    """Delete the analyses no `log` consumed within PENDING_TTL_S, keeping a count of them.
+
+    Only `log` removes the file it merges, so every hook nudge Claude ignored (and every `analyze`
+    never followed by `log`) used to stay forever. Each one is a prompt that was nudged and never
+    whispered: it sits in neither arm of the stats comparison, so the count outlives the file."""
+    gone = 0
+    for p in _stale_pending():
+        try:
+            os.remove(p)
+            gone += 1
+        except OSError:
+            continue   # another session reaped it first
+    if gone:
+        try:
+            with memory_lock(timeout_s=lock_timeout_s):
+                write_json(PENDING_REAPED_PATH, {"reaped": _reaped_so_far() + gone, "last_at": now_iso()})
+        except Exception:
+            pass
+    return gone
+
+
+def never_logged_count() -> int:
+    """Analyses never consumed by `log`: reaped so far plus the stale ones not reaped yet."""
+    return _reaped_so_far() + len(_stale_pending())
+
+
+def _learn_basis(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The runs `learn` reads. learn_due and mark_learned count this set and no other: counting the
+    baseline arm too told Claude to consolidate a log that held no evidence."""
+    return [r for r in records if is_whispered(r) and not r.get("dry")]
+
+
 def learn_due(cfg: Dict[str, Any], records: Optional[List[Dict[str, Any]]] = None) -> bool:
     recs = read_log() if records is None else records
-    real = [r for r in recs if not r.get("dry")]
+    real = _learn_basis(recs)
     if not real:
         return False
     last = 0
@@ -1130,4 +1189,4 @@ def learn_due(cfg: Dict[str, Any], records: Optional[List[Dict[str, Any]]] = Non
 
 
 def mark_learned() -> None:
-    write_json(os.path.join(MEMORY_DIR, "last_learn.json"), {"runs": len([r for r in read_log() if not r.get("dry")]), "at": now_iso()})
+    write_json(os.path.join(MEMORY_DIR, "last_learn.json"), {"runs": len(_learn_basis(read_log())), "at": now_iso()})

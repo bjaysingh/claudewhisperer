@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import _bootstrap  # noqa: F401
@@ -71,6 +72,52 @@ class ControlArm(unittest.TestCase):
     def test_baseline_runs_are_not_evidence_for_learning(self):
         W.rewrite_log([run("baseline", "correction", task="feature") for _ in range(8)])
         self.assertEqual(cli("learn")["strong_signals"], 0)
+
+    def test_baseline_runs_do_not_make_learning_due(self):
+        """learn_due has to count what learn counts, or Claude is told to consolidate and finds nothing."""
+        marker = os.path.join(W.MEMORY_DIR, "last_learn.json")
+        if os.path.exists(marker):
+            os.remove(marker)
+        W.rewrite_log([run("baseline", "ok") for _ in range(12)])
+        self.assertFalse(W.learn_due(W.load_config()))
+        W.rewrite_log([run("whispered", "ok") for _ in range(12)])
+        self.assertTrue(W.learn_due(W.load_config()), "the same log, whispered, is due")
+
+    def test_the_learn_marker_counts_the_same_runs_as_learn_due(self):
+        W.rewrite_log([run("baseline", "ok") for _ in range(12)] + [run("whispered", "ok") for _ in range(2)])
+        W.mark_learned()
+        W.rewrite_log(W.read_log() + [run("whispered", "ok") for _ in range(10)])
+        self.assertTrue(W.learn_due(W.load_config()), "ten whispered runs since the last learn")
+
+
+class AnalysesNobodyLogged(unittest.TestCase):
+    """An analysis `log` never consumed is a prompt that was nudged (or analysed) and never whispered.
+    It lands in neither arm of the comparison, so stats has to show the count, not lose it."""
+
+    def _pending(self, name, age_s):
+        p = os.path.join(W.PENDING_DIR, name + ".json")
+        W.write_json(p, {"id": name})
+        t = time.time() - age_s
+        os.utime(p, (t, t))
+        return p
+
+    def test_stats_counts_stale_analyses_before_and_after_they_are_reaped(self):
+        W.rewrite_log([run("whispered", "ok")])
+        before = cli("stats")["analyses_never_logged"]
+        stale = self._pending("a-orphan", W.PENDING_TTL_S + 60)
+        fresh = self._pending("a-inflight", 5)
+        try:
+            self.assertEqual(cli("stats")["analyses_never_logged"], before + 1, "stale counts, in-flight does not")
+            self.assertEqual(W.reap_pending(), 1)
+            self.assertFalse(os.path.exists(stale))
+            self.assertTrue(os.path.exists(fresh), "an analysis inside the TTL may still be logged")
+            self.assertEqual(cli("stats")["analyses_never_logged"], before + 1, "reaped, still counted")
+        finally:
+            os.remove(fresh)
+
+    def test_a_session_filter_does_not_report_a_global_count(self):
+        W.rewrite_log([run("whispered", "ok")])
+        self.assertIsNone(cli("stats", "--session", "s")["analyses_never_logged"])
 
 
 class Trend(unittest.TestCase):

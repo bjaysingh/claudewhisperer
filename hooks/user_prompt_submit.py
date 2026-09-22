@@ -164,6 +164,7 @@ def main() -> None:
             return
         # the hook sits between enter and Claude seeing the prompt; carry the cost so stats can show it
         a["hook_ms"] = int((time.time() - t0) * 1000)
+        W.reap_pending(lock_timeout_s=1.0)   # nudges nobody logged; nothing else ever removes them
         W.write_json(os.path.join(W.PENDING_DIR, a["id"] + ".json"), a)
         skill_md = os.path.join(W.SKILL_DIR, "SKILL.md")
         parts = [

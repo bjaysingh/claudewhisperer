@@ -7,6 +7,8 @@ is what a pinned model version moving actually requires.
 """
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -53,6 +55,17 @@ class SavedCases(unittest.TestCase):
                 self.assertTrue(name.endswith(".json"))
                 with open(os.path.join(CASES_DIR, name), encoding="utf-8") as f:
                     self.assertIsInstance(json.load(f), list)
+
+    def test_offline_replay_has_no_drift(self):
+        """`run_cases.py` without --jev is the offline gate. Diffed against a Jev-built baseline it reported
+        every place Jev and the heuristics disagree as drift, failed on a clean checkout, and offered an
+        `--update` that would have overwritten the Jev baseline. Each path keeps its own."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        self.assertTrue(os.path.exists(os.path.join(here, "cases_snapshot_heuristics.json")),
+                        "without a baseline run_cases.py writes one and passes by definition")
+        p = subprocess.run([sys.executable, os.path.join(here, "run_cases.py")], capture_output=True, text=True,
+                           timeout=60, env=dict(os.environ, WHISPERER_HOME=tempfile.mkdtemp(prefix="whisperer-test-")))
+        self.assertEqual(p.returncode, 0, p.stdout[-1500:])
 
     def test_case_set_is_big_enough_to_be_worth_something(self):
         self.assertGreaterEqual(len(self.cases), 10)

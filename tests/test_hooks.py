@@ -5,9 +5,11 @@ unit test of the internals cannot tell a working hook from one whose body never 
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import _bootstrap  # noqa: F401
@@ -95,6 +97,21 @@ class UserPromptSubmitHook(unittest.TestCase):
         ctx = json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("[Claude Whisperer hook]", ctx)
         self.assertIn("analysis=a-", ctx)
+
+    def test_a_nudge_reaps_analyses_nobody_logged(self):
+        """Only `log` removed a pending analysis, so every nudge Claude ignored left a file behind for good.
+        The file goes; the count of it stays, because stats reports it."""
+        stale = os.path.join(W.PENDING_DIR, "a-ignored.json")
+        W.write_json(stale, {"id": "a-ignored"})
+        t = time.time() - W.PENDING_TTL_S - 60
+        os.utime(stale, (t, t))
+        counted = W.never_logged_count()
+        p = self._send("hey, when you get a chance could you please fix the login thing? it 500s on expired "
+                       "tokens and it should 401. it's driving me crazy. be careful not to break anything.")
+        new_id = re.search(r"analysis=(a-\S+)", p.stdout).group(1)
+        self.assertFalse(os.path.exists(stale))
+        self.assertTrue(os.path.exists(os.path.join(W.PENDING_DIR, new_id + ".json")), "the new nudge is not stale")
+        self.assertEqual(W.never_logged_count(), counted)
 
 
 class StopHook(unittest.TestCase):
