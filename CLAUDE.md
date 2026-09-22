@@ -141,8 +141,8 @@ warning — every threshold in `config.json` was tuned against the old one. A bu
 `python3 tests/run_cases.py --jev`, read the diff, then re-tune.
 
 Every Jev decision has a paired heuristic fallback in the same file (`triage_heuristic`, `task_type_heuristic`,
-`find_risks`, `correction_heuristic`, `followup_heuristic`). A slow (>`timeout_s`) or failed call is swallowed,
-counted in `memory/jev_status.json`, and the heuristic answers instead. Thresholds live in `memory/config.json`
+`multi_task_heuristic`, `find_risks`, `correction_heuristic`, `followup_heuristic`). A slow (>`timeout_s`) or failed
+call is swallowed, counted in `memory/jev_status.json`, and the heuristic answers instead. Thresholds live in `memory/config.json`
 (`task_min_confidence`, `label_min_confidence`, `intent_drop_pause_at`), never hardcoded.
 
 ### Cost of the hook
@@ -158,7 +158,7 @@ Optimise when that p95 climbs, not on suspicion.
 `tests/cases/prompts.json` is the regression set for the analysis layer: real prompts, ugly ones included, each
 with a `why`, the deterministic `expect`ations, and `must_keep` strings the rewrite may never drop. A case may carry a
 `known_gap`: the expectation then pins what the heuristic *does* while the field records what it *should* say,
-so the set never quietly blesses a defect (one is open: `destructive-ops`). `run_cases.py` replays them and diffs against
+so the set never quietly blesses a defect (none are open right now). `run_cases.py` replays them and diffs against
 a baseline per path, exiting 1 on drift: `tests/cases_snapshot_heuristics.json` offline (also run by the unit
 suite), `tests/cases_snapshot_jev.json` with `--jev` — the check to run when the Jev model version moves, before a
 user sees new behavior. `--update` rewrites only the baseline of the path it ran.

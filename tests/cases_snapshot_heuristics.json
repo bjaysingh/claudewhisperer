@@ -49,7 +49,7 @@
     "destructive-ops": {
       "task_type": "ops",
       "task_type_source": "heuristic",
-      "triage": "light",
+      "triage": "full",
       "triage_source": "heuristic",
       "risk_flags": [
         "deploy",
@@ -57,7 +57,7 @@
       ],
       "risk": true,
       "secrets_detected": false,
-      "multi_task_hint": false,
+      "multi_task_hint": true,
       "filler_total": 0,
       "tokens": 25,
       "paths_missing": [],
@@ -66,7 +66,7 @@
     "several-independent-tasks": {
       "task_type": "feature",
       "task_type_source": "heuristic",
-      "triage": "light",
+      "triage": "full",
       "triage_source": "heuristic",
       "risk_flags": [],
       "risk": false,

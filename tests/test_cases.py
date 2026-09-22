@@ -120,5 +120,48 @@ class SavedCases(unittest.TestCase):
                     self.assertEqual(len(W.read_prompts_seen()), before)
 
 
+class MultiTaskHeuristic(unittest.TestCase):
+    """Several tasks are told apart by shape: a work verb, a sequence marker, another work verb. Each row pins
+    one side of one rule, so loosening any of them fails a named prompt rather than a count."""
+
+    SEVERAL = [
+        "fix the flaky retry test in test_net.py; after that, add a request timeout to the http client",
+        "add a --dry-run flag to the sync command. then add a --verbose flag to export.",
+        "tag the release then publish it to pypi",
+        "update the README install section and then regenerate the API reference",
+    ]
+    ONE = [
+        # the verb after the marker narrates a symptom or specifies behaviour; it is not an imperative
+        "fix the bug where the session timer resets, then fires twice",
+        "write a migration that adds a nullable column, then backfills it in batches",
+        # a contingency, not a second task
+        "if the deploy fails after you update the config, then restore the previous build",
+        # routine and check tails belong to the task before them
+        "add the retry flag to the sync command, then commit",
+        "fix the flaky upload test, then run the whole suite to make sure nothing else broke",
+        # a follow-up that opens with the marker has no first task
+        "then redeploy the api",
+        "I ran the migration and then it crashed with a lock timeout, find out why",
+        "explain how the scheduler picks the next job and then how retries get queued",
+        # the older markers still need a prompt long enough to hold two tasks
+        "also fix the typo in the footer",
+    ]
+
+    def test_chained_work_is_several_tasks(self):
+        for p in self.SEVERAL:
+            with self.subTest(prompt=p):
+                self.assertTrue(W.multi_task_heuristic(p))
+
+    def test_one_task_with_a_sequence_word_is_still_one(self):
+        for p in self.ONE:
+            with self.subTest(prompt=p):
+                self.assertFalse(W.multi_task_heuristic(p))
+
+    def test_several_tasks_are_full_triage_however_short(self):
+        """Q_ANALYZE puts several tasks mixed together under `full`; before this a short chain read as tight."""
+        a = analyse({"prompt": "tag the release then publish it to pypi"}, tempfile.mkdtemp())
+        self.assertEqual(a["triage"]["value"], "full")
+
+
 if __name__ == "__main__":
     unittest.main()

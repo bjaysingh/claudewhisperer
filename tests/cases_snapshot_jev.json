@@ -75,7 +75,7 @@
     "several-independent-tasks": {
       "task_type": "feature",
       "task_type_source": "jev",
-      "triage": "light",
+      "triage": "full",
       "triage_source": "heuristic",
       "risk_flags": [],
       "risk": false,

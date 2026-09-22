@@ -328,6 +328,24 @@ OUTPUT_REQUEST_TAIL = re.compile(
 # Risk flags that mean the work is operational whatever verb the user reached for
 OPS_RISK_FLAGS = {"schema", "deploy", "delete"}
 
+# Several tasks, told apart by shape: a work verb, a sequence marker, another work verb ("drop the table,
+# then redeploy"). Base forms only, so a narrated symptom ("resets, then fires twice") is not a task. Checks
+# and routine tails ("then run the suite", "then commit") belong to the task before them and are left out
+# on purpose, as are the methods of one fix (reproduce, investigate).
+WORK_VERB = (r"(?:add|archive|backfill|build|bump|clean|close|configure|convert|create|delete|deploy|deprecate|"
+             r"disable|document|drop|enable|extract|fix|implement|install|merge|migrate|move|open|patch|port|"
+             r"provision|prune|publish|purge|rebase|rebuild|redeploy|refactor|regenerate|reindex|release|remove|"
+             r"rename|replace|reset|restart|restore|revert|rewrite|rotate|seed|set ?up|split|tag|truncate|"
+             r"uninstall|update|upgrade|vacuum|wire|write)")
+WORK_VERB_RE = re.compile(r"\b" + WORK_VERB + r"\b")
+SEQUENCE_RE = re.compile(r"\b(?:then|after that|afterwards),?\s+(?:also\s+)?(?:please\s+)?" + WORK_VERB + r"\b")
+# "if the health check fails, then roll back" is one instruction with a contingency, not two tasks
+CONDITIONAL_RE = re.compile(r"\b(?:if|when|whenever|once|unless)\b[^.;!?\n]*$")
+# The older markers open plenty of one-task prompts ("also fix the typo"), so they only count in a prompt
+# long enough to hold two.
+MULTI_TASK_LONG_RE = re.compile(r"\b(and then|after that|additionally|secondly|finally|as well as|"
+                                r"also (?!(please )?(explain|summari[sz]e|tell|show|describe|walk|let me know)))\b")
+
 TASK_ORDER = ["bugfix", "test", "refactor", "review", "explain", "research", "docs", "ops", "feature"]
 
 
@@ -343,6 +361,15 @@ def _score_tasks(low: str) -> Dict[str, int]:
         if n:
             scores[name] = n
     return scores
+
+
+def multi_task_heuristic(text: str) -> bool:
+    low = text.lower()
+    for m in SEQUENCE_RE.finditer(low):
+        before = low[:m.start()]
+        if WORK_VERB_RE.search(before) and not CONDITIONAL_RE.search(before):
+            return True
+    return bool(MULTI_TASK_LONG_RE.search(low)) and len(text.split()) > 25
 
 
 def task_type_heuristic(text: str, risk_flags: Optional[List[str]] = None) -> Tuple[str, Dict[str, int]]:
@@ -494,6 +521,8 @@ def triage_heuristic(prompt: str, analysis: Dict[str, Any], cfg: Dict[str, Any])
         return "skip", "short acknowledgement or one-line command"
     if len(words) <= 3:
         return "skip", "too short to optimize"
+    if analysis.get("multi_task_hint"):   # Q_ANALYZE: several tasks mixed together is `full`, however tight
+        return "full", "several tasks in one prompt"
     if analysis["tokens"] < 60 and analysis["filler"]["total"] <= 1 and not analysis["fenced_blocks"] and not analysis["claude_md_overlap"]:
         return "light", "short and already tight"
     return "full", "long, vague, or carries pasted material"
@@ -880,7 +909,7 @@ def analyze_prompt(prompt: str, cwd: str, cfg: Dict[str, Any], use_jev: bool = T
         "secrets_detected": bool(find_secrets(prompt)),
         "paths": find_paths(prompt, cwd),
         "fenced_blocks": fenced_blocks(prompt, cwd),
-        "multi_task_hint": bool(re.search(r"\b(and then|after that|additionally|secondly|finally|as well as|also (?!(please )?(explain|summari[sz]e|tell|show|describe|walk|let me know)))\b", prompt.lower())) and len(prompt.split()) > 25,
+        "multi_task_hint": multi_task_heuristic(prompt),
         "questions_in_prompt": prompt.count("?"),
     }
     files = claude_md_files(cwd)

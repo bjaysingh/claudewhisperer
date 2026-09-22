@@ -48,15 +48,14 @@
     "name": "destructive-ops",
     "why": "Guardrail case: the rewrite has to name the specific destructive action to confirm.",
     "prompt": "clean up the old release branches and drop the legacy_sessions table from production, then redeploy",
-    "known_gap": "triage `light` and multi_task_hint false: three chained actions in 15 words read as one tight task. The multi-task regex knows 'and then' but not ', then', and ignores prompts of 25 words or fewer; triage_heuristic weighs only length, filler, pasted code and CLAUDE.md overlap, while Q_ANALYZE puts several tasks mixed together under `full`. Should be `full` with multi_task_hint true, as Jev answers. Risk flags fire, so the hook still nudges it; what is lost is the numbered-steps hint.",
     "expect": {
       "risk_flags_include": [
         "schema",
         "deploy"
       ],
       "task_type": "ops",
-      "triage": "light",
-      "multi_task_hint": false
+      "triage": "full",
+      "multi_task_hint": true
     },
     "must_keep": [
       "legacy_sessions",
