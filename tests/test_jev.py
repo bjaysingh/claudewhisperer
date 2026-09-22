@@ -6,6 +6,7 @@ with the response, not that TypeSafe is reachable.
 import io
 import json
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -114,6 +115,53 @@ class FailureBehaviour(unittest.TestCase):
     def test_malformed_response_does_not_raise(self):
         with mock.patch("urllib.request.urlopen", reply({"unexpected": True})):
             self.assertIsNone(W.jev_ask({"prompt": "x"}, W.Q_ANALYZE, cfg_with()))
+
+
+class MultiTaskCutComesFromConfig(unittest.TestCase):
+    """The cut is 0.7, not 0.5, and it has to stay a config value.
+
+    Measured over the saved cases, genuinely multi-task prompts answer >= 0.89 and single ones
+    <= 0.50. A cut at 0.5 sat on one case's mode and flipped run to run; these pin both the
+    default and the fact that moving it in config.json actually moves the decision.
+    """
+
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "sk-test"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.cwd = tempfile.mkdtemp()
+
+    def hint_for(self, p, cut=None):
+        cfg = cfg_with()
+        if cut is not None:
+            cfg["jev"]["multi_task_at"] = cut
+        body = {"answers": {"multi_task": {"type": "noul", "noul": p}}}
+        # not a one-liner: the heuristic triages a short prompt as skip, and skip never asks Jev
+        prompt = ("add a health check endpoint to the api and update the openapi spec for it, "
+                  "then explain what changed")
+        with mock.patch("urllib.request.urlopen", reply(body)):
+            a = W.analyze_prompt(prompt, self.cwd, cfg, use_jev=True)
+        self.assertTrue(a["jev"]["used"], "the stubbed answer never reached the code")
+        return a["multi_task_hint"]
+
+    def test_the_default_cut_ships_at_the_gap_in_the_answers(self):
+        self.assertEqual(W.DEFAULT_CONFIG["jev"]["multi_task_at"], 0.7)
+
+    def test_an_answer_at_the_old_cut_is_not_several_tasks(self):
+        # 0.5 is where "and also explain it" lands; it is one task
+        self.assertFalse(self.hint_for(0.5))
+        self.assertFalse(self.hint_for(0.69))
+
+    def test_an_answer_above_the_cut_is_several_tasks(self):
+        self.assertTrue(self.hint_for(0.7))
+        self.assertTrue(self.hint_for(0.94))
+
+    def test_config_moves_the_decision_so_the_cut_is_not_hardcoded(self):
+        self.assertTrue(self.hint_for(0.8), "0.8 is over the default cut")
+        self.assertFalse(self.hint_for(0.8, cut=0.9),
+                         "raising multi_task_at in config.json must move the boundary")
+        self.assertTrue(self.hint_for(0.55, cut=0.5),
+                        "lowering it must move the boundary too")
 
 
 if __name__ == "__main__":
