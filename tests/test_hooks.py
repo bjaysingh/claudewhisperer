@@ -98,6 +98,32 @@ class UserPromptSubmitHook(unittest.TestCase):
         self.assertIn("[Claude Whisperer hook]", ctx)
         self.assertIn("analysis=a-", ctx)
 
+    def test_a_subagent_report_is_not_the_user_reacting(self):
+        """A hand-back reaches UserPromptSubmit as if typed. Read as a reply it labelled the user's last run:
+        both baseline runs of one session became corrections while only subagent reports were arriving."""
+        seed_open_run()
+        pending, seen = set(os.listdir(W.PENDING_DIR)), len(W.read_prompts_seen())
+        p = self._send('<agent-message from="a4ccf0b0f0b63ce96">\n[Subagent hand-back] The report follows:\n'
+                       "  that's not what i asked for, you dropped the pagination. fix the login bug and update "
+                       "the readme with the new setup steps\n</agent-message>")
+        self.assertEqual(p.stdout, "", "no nudge")
+        log = W.read_log()
+        self.assertEqual(len(log), 1, "no baseline run")
+        self.assertEqual((log[0]["outcome"], log[0]["followups"]), (None, 0), "the open run is untouched")
+        self.assertEqual(set(os.listdir(W.PENDING_DIR)), pending, "no pending analysis")
+        self.assertEqual(len(W.read_prompts_seen()), seen, "no fingerprint")
+
+    def test_a_task_notification_is_not_the_user_reacting(self):
+        seed_open_run()
+        p = self._send('<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n'
+                       '<summary>Agent "fix the login bug" finished</summary>\n</task-notification>')
+        self.assertEqual(p.stdout, "")
+        r = W.read_log()[0]
+        self.assertEqual((r["outcome"], r["followups"], r["closed"]), (None, 0, False))
+
+    def test_a_prompt_about_agent_messages_is_still_a_prompt(self):
+        self.assertFalse(W.is_harness_message("why does the agent-message parser choke on nested tags"))
+
     def test_a_nudge_reaps_analyses_nobody_logged(self):
         """Only `log` removed a pending analysis, so every nudge Claude ignored left a file behind for good.
         The file goes; the count of it stays, because stats reports it."""

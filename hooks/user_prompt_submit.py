@@ -61,6 +61,8 @@ def main() -> None:
         return
     try:
         import whisper_lib as W
+        if W.is_harness_message(prompt):   # a subagent or task reporting back, not the user reacting
+            return
         W.ensure_memory()
         cfg = W.load_config()
     except Exception:

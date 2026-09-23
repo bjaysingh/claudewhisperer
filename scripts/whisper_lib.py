@@ -564,6 +564,17 @@ def claude_md_overlap(prompt: str, files: List[str]) -> List[Dict[str, str]]:
     return hits
 
 
+# Harness traffic reaches UserPromptSubmit as if the user had typed it: a subagent's hand-back arrives as
+# <agent-message from="...">, a background task's end as <task-notification>. Seen in the hook's own input
+# on 2026-09-22 (the fingerprints of the analyses it wrote carried "agent-message" and "task-notification").
+# Neither is the user reacting to the last run, so neither may label it, count as a baseline, or get a nudge.
+HARNESS_MESSAGE_RE = re.compile(r"<(?:agent-message|task-notification)\b")
+
+
+def is_harness_message(prompt: str) -> bool:
+    return bool(HARNESS_MESSAGE_RE.search(prompt[:200]))
+
+
 def is_ack(prompt: str, max_words: int) -> bool:
     p = prompt.strip().lower()
     if len(p.split()) > max_words:

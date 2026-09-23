@@ -126,6 +126,9 @@ string used for detection and removal; a `.whisperer.bak` backup is written next
 - `user_prompt_submit.py`: labels the previous open run, records a fingerprint, expands an exact shortcut key
   (the only silent prompt rewrite the system does), then triages and injects a nudge with the analysis id.
   It returns early for acks, corrections, answers and routine follow-ups — rewriting those adds a turn.
+  Before any of that it drops harness traffic, which arrives on the same event as if typed: a subagent's
+  hand-back (`<agent-message ...>`) or a background task ending (`<task-notification>`). Read as the user's
+  reply, those labelled the previous run (`W.is_harness_message`).
 - `stop.py`: records `reply_chars`/`reply_lines` on the open run, so stats can show whether replies shrink.
 
 ### Jev (TypeSafe System One), optional
